@@ -81,7 +81,7 @@ class PurePursuitController():
         #   - with queue size 1
         self.control_pub = rospy.Publisher(
             self.control_topic, ServoMsg, queue_size=1)
-        # rospy.init_node("ServoMsgPublisher", anonymous=True)
+        # rospy.init_node("ServoMsgPublisher")
         # rate = rospy.Rate(10) # post servo control position updates at 10hz
         ########################### END OF TODO 1#################################
 
@@ -99,10 +99,10 @@ class PurePursuitController():
         #   - has message type <Odometry> (nav_msgs.msg.Odometry)
         #   - with callback function <self.odometry_callback>, which has already been implemented
         #   - with queue size 1
-        # rospy.init_node("OdometryListener", anonymous=True)
         rospy.Subscriber(self.odom_topic, Odometry,
                          self.odometry_callback, queue_size=1)
-        rospy.spin()
+        # rospy.init_node("OdometryListener")
+        # rospy.spin()
         ########################### END OF TODO 2#################################
 
     def odometry_callback(self, odom_msg: Odometry):
@@ -161,12 +161,17 @@ class PurePursuitController():
 
         ########################## TODO: 4. Construct and publish a ROS message ###################
         # 1. Create an empty ServoMsg message
-        #   Hint: check the message data structure using the command
         #       rosmsg show racecar_msgs/ServoMsg
+        #   Hint: check the message data structure using the command
         # 2. Set the header time to the current time
         # 3. Set the throttle and steering angle to the servo message
         # 4. Publish the servo message
-
+        servo_msg = ServoMsg()
+        servo_msg.header.stamp = rospy.Time.from_sec(state.t)
+        servo_msg.throttle = throttle
+        servo_msg.steer = steer
+        rospy.loginfo(f"Setting ServoMsg throttle: {throttle:.2f}, steer: {steer:.2f}")
+        self.control_pub.publish(servo_msg)
         ########################### END OF TODO 4 #################################
 
     def planning_thread(self):
@@ -220,8 +225,31 @@ class PurePursuitController():
                     # 5. clip the steering angle between "-self.steer_max" and "self.steer_max"
                     # 6. apply the simple proportional controller for the acceleration to track the reference_velocity
 
-                    accel = 0  # TO BE FILLED
-                    steer = 0  # TO BE FILLED
+                    # if close enough so stop
+                    close_dist = .1 # in metres
+                    behind_you_deg = 45 # degrees
+                    alpha_deg = alpha * 180 / np.pi
+                    reference_velocity = 0 # scope
+                    steer = 0 # scope
+
+                    # if directly behind us
+                    if -180 + behind_you_deg > alpha_deg or alpha_deg > 180 - behind_you_deg:
+                        reference_velocity = self.max_vel
+                        steer = self.max_steer
+                    else:
+                        reference_velocity = min(self.max_vel, dis2goal-self.stop_distance)
+                        l_d = min(self.ld_max, dis2goal)
+                        steer = np.arctan(2*self.wheel_base*np.sin(alpha) / l_d)
+                        steer = np.clip(steer, -self.max_steer, self.max_steer)
+
+                    # accel alg
+                    accel = self.throttle_gain * (reference_velocity - vel_cur)
+
+                    # worry about car shooting backwards?
+                    if dis2goal < close_dist:
+                        accel = -1
+                        steer = 0
+                    
                     ########################### END OF TODO 5 ###########################################
 
                     # publish the control
