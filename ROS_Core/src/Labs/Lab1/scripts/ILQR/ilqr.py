@@ -130,13 +130,22 @@ class ILQR():
 		obs_refs = self.collision_checker.check_collisions(trajectory, self.obstacle_list)
 		return path_refs, obs_refs
 
+	def compute_new_cost(self,trajectory, controls):
+		# Get path and obstacle references based on your current nominal trajectory.
+		# Note: you will NEED TO call this function and get new references at each iteration.
+		path_refs, obs_refs = self.get_references(trajectory)
+
+		# Get the initial cost of the trajectory.
+		return self.cost.get_traj_cost(trajectory, controls, path_refs, obs_refs)
+
+
 	def plan(self, init_state: np.ndarray,
 				controls: Optional[np.ndarray] = None) -> Dict:
 		'''
 		Main ILQR loop.
 		Args:
 			init_state: [num_dim_x] np.ndarray: initial state.
-			control: [num_dim_u, T] np.ndarray: initial control.
+			controls: [num_dim_u, T] np.ndarray: optional initial control.
 		Returns:
 			A dictionary with the following keys:
 				status: int: -1 for failure, 0 for success. You can add more status if you want.
@@ -161,19 +170,36 @@ class ILQR():
 		# Start timing
 		t_start = time.time()
 
-		# Rolls out the nominal trajectory and gets the initial cost.
+		# 1. Rolls out the nominal trajectory (implemented) and gets the initial cost.
 		trajectory, controls = self.dyn.rollout_nominal_np(init_state, controls)
 
-		# Get path and obstacle references based on your current nominal trajectory.
-		# Note: you will NEED TO call this function and get new references at each iteration.
-		path_refs, obs_refs = self.get_references(trajectory)
-
-		# Get the initial cost of the trajectory.
-		J = self.cost.get_traj_cost(trajectory, controls, path_refs, obs_refs)
+		# 2. Get the initial cost of the trajectory.
+		Jorig = self.compute_new_cost(trajectory, controls)
 
 		##########################################################################
 		# TODO 1: Implement the ILQR algorithm. Feel free to add any helper functions.
 		# You will find following implemented functions useful:
+		# https://colab.research.google.com/drive/1Svs5mOh-2WPcUbjGc_DEs2tnez3gRwei?usp=sharinghttps%3A%2F%2Fcolab.research.google.com%2Fdrive%2F1Svs5mOh-2WPcUbjGc_DEs2tnez3gRwei%3Fusp%3Dsharing#scrollTo=1JAhQdsMt7gV
+		# from canvas was useful :)
+		# use jax so can use gpu and ta happy
+		while True:
+			# forward pass
+			for alpha_curr in self.alphas:
+				# do alpha multiplication 
+
+				# 1. Rolls out the nominal trajectory (implemented) and gets the initial cost.
+				trajectory, controls = self.dyn.rollout_nominal_np(init_state, controls)
+
+				# 2. Get the initial cost of the trajectory.
+				Jnew = self.compute_new_cost(trajectory, controls)
+
+				if Jnew < Jorig:
+					break
+			
+			# backward pass
+
+			# break if feedforward terms are sufficiently small
+
 
 		# ******** Functions to compute the Jacobians of the dynamics  ************
 		# A, B = self.dyn.get_jacobian_np(trajectory, controls)
