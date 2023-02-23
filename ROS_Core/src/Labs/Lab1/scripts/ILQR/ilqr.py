@@ -10,6 +10,8 @@ from .ref_path import RefPath
 from .config import Config
 import time
 
+import jax.numpy as jnp
+
 status_lookup = ['Iteration Limit Exceed',
                 'Converged',
                 'Failed Line Search']
@@ -138,19 +140,84 @@ class ILQR():
 		# Get the initial cost of the trajectory.
 		return self.cost.get_traj_cost(trajectory, controls, path_refs, obs_refs)
 
+	def backward_pass(self, x_nom, u_nom, lambda_val=1):
+		''' Run backward LQR pass
+			x_nom: 5xN matrix of trajectory
+			u_nom: 2xN matrix of nominal controls
+			target_state: 5d matrix of target state
+			
+			Returns:
+			K: State feedback matrices
+			k: feedforward offsets
+			lambda_val: regularisation parameter
+		'''
+		# Note: Largely based on handout and python example code
+		# ported to jax + variables according to handout and slide names
+
+		# Get path and obstacle references based on your current nominal trajectory.
+		path_refs, obs_refs = self.get_references(x_nom)
+		q, r, Q, R, H = self.cost.get_derivatives_jax(x_nom, u_nom, path_refs, obs_refs)
+		
+		A, B = self.dyn.get_jacobian_np(x_nom, u_nom)
+
+		k_open_loop = jnp.zeros((2, self.T))
+		K_closed_loop = jnp.zeros((2, 4, self.T))
+		
+		# Derivative of value function at final step
+		end_t_idx = self.T - 1
+		p = q[:, end_t_idx]
+		P = Q[:,:, end_t_idx]
+		t = end_t_idx - 1
+
+		lambda_a = 5 # Arbitrary - just has to be over 1
+		while t >= 0:
+			Q_x = q[:,t] + jnp.matmul(A[:,:,t].T, p)
+			Q_u = r[:,t] + jnp.matmul(B[:,:,t].T, p)
+			Q_xx = Q[:,:,t] + jnp.matmul(A[:,:,t].T, jnp.matmul(P, A[:,:,t]))
+			Q_uu = R[:,:,t] + jnp.matmul(B[:,:,t].T, jnp.matmul(P, B[:,:,t]))
+			Q_ux = H[:,:,t] + jnp.matmul(B[:,:,t].T, jnp.matmul(P, A[:,:,t]))
+
+			# Add regularization
+			reg_matrix = reg * jnp.eye(5)
+			Q_uu_reg = R[:,:,t] + jnp.matmul(B[:,:,t].T, jnp.matmul((P+reg_matrix), B[:,:,t]))
+			Q_ux_reg = H[:,:,t] + jnp.matmul(B[:,:,t].T, jnp.matmul( (P+reg_matrix) , A[:,:,t]))
+        
+			# Check if Q_uu_reg is positive definite
+			if not jnp.all(jnp.linalg.eigvals(Q_uu_reg) > 0) and lambda_val < 1e5:
+				lambda_val *= lambda_a
+				t = end_t_idx - 1 # restart from end of trajectory
+				p = q[:,end_t_idx]
+				P = Q[:,:, end_t_idx]
+				continue
+
+			Q_uu_reg_inv = jnp.linalg.inv(Q_uu_reg)
+
+			# Calculate policy
+			k = jnp.matmul(-Q_uu_reg_inv, Q_u)
+			K = jnp.matmul(-Q_uu_reg_inv, Q_ux_reg)
+			k_open_loop[:,t] = k          
+			K_closed_loop[:, :, t] = K
+
+			# Update value function derivative for the previous time step
+			p = Q_x + jnp.matmul(K.T, jnp.matmul(Q_uu, k)) + jnp.matmul(K.T, Q_u) + jnp.matmul(Q_ux.T, k)
+			P = Q_xx + jnp.matmul(K.T @ Q_uu, jnp.matmul(K + K.T, Q_ux)) + jnp.matmul(Q_ux.T, K)
+			t -= 1
+
+		lambda_val = max(1e-5, K*0.5)
+		return K_closed_loop, k_open_loop, lambda_val
 
 	def plan(self, init_state: np.ndarray,
-				controls: Optional[np.ndarray] = None) -> Dict:
+				u_nom: Optional[np.ndarray] = None) -> Dict:
 		'''
 		Main ILQR loop.
 		Args:
 			init_state: [num_dim_x] np.ndarray: initial state.
-			controls: [num_dim_u, T] np.ndarray: optional initial control.
+			u_nom: [num_dim_u, T] np.ndarray: optional initial control.
 		Returns:
 			A dictionary with the following keys:
 				status: int: -1 for failure, 0 for success. You can add more status if you want.
 				t_process: float: time spent on planning.
-				trajectory: [num_dim_x, T] np.ndarray: ILQR planned trajectory.
+				x_nom: [num_dim_x, T] np.ndarray: ILQR planned x_nom.
 				controls: [num_dim_u, T] np.ndarray: ILQR planned controls sequence.
 				K_closed_loop: [num_dim_u, num_dim_x, T] np.ndarray: closed loop gain.
 				k_closed_loop: [num_dim_u, T] np.ndarray: closed loop bias.
@@ -170,11 +237,12 @@ class ILQR():
 		# Start timing
 		t_start = time.time()
 
-		# 1. Rolls out the nominal trajectory (implemented) and gets the initial cost.
-		trajectory, controls = self.dyn.rollout_nominal_np(init_state, controls)
+		# 1. Rolls out the nominal x_nom (implemented) and gets the initial cost.
+		x_nom, u_nom = self.dyn.rollout_nominal_np(init_state, u_nom)
+		controls = u_nom	# initialize for later :)
 
-		# 2. Get the initial cost of the trajectory.
-		Jorig = self.compute_new_cost(trajectory, controls)
+		# 2. Get the initial cost of the x_nom.
+		Jorig = self.compute_new_cost(x_nom, u_nom)
 
 		##########################################################################
 		# TODO 1: Implement the ILQR algorithm. Feel free to add any helper functions.
@@ -182,91 +250,46 @@ class ILQR():
 		# https://colab.research.google.com/drive/1Svs5mOh-2WPcUbjGc_DEs2tnez3gRwei?usp=sharinghttps%3A%2F%2Fcolab.research.google.com%2Fdrive%2F1Svs5mOh-2WPcUbjGc_DEs2tnez3gRwei%3Fusp%3Dsharing#scrollTo=1JAhQdsMt7gV
 		# from canvas was useful :)
 		# use jax so can use gpu and ta happy
-		while True:
-			# forward pass
-			for alpha_curr in self.alphas:
-				# do alpha multiplication 
 
-				# 1. Rolls out the nominal trajectory (implemented) and gets the initial cost.
-				trajectory, controls = self.dyn.rollout_nominal_np(init_state, controls)
-
-				# 2. Get the initial cost of the trajectory.
-				Jnew = self.compute_new_cost(trajectory, controls)
-
-				if Jnew < Jorig:
-					break
+		steps = 0
+		converged_flag = False
+		K, k = None, None
+		while steps <= 100:
+			# Backward pass
+			K, k, lambda_val = self.backward_pass(x_nom, u_nom, lambda_val=1)
 			
-			# backward pass
+			# Forward pass
+			for alpha_curr in self.alphas:
+				# 1. Rolls out the nominal x_nom (implemented) and gets the initial cost.
+				# update controls
+				x = jnp.zeros_like(x_nom)
+				for t in range(self.T - 1):
+					controls[:,t] = u_nom[:,t] + jnp.matmul(K[:,:,t], (x[:,t] - x_nom[:, t])) + (alpha_curr * k[:,:,t])
+					x[:, t + 1] = self.dyn.integrate_forward_jax(x[:, t], controls[:, t])
 
+				# 2. Get the initial cost of the x_nom.
+				Jnew = self.compute_new_cost(x, controls)
+
+				if jnp.abs(Jnew - Jorig) < 0.001: # arbitrary value
+					x_nom = x
+					k = k * alpha_curr
+					converged_flag = True
+					break
+				
+			steps += 1
+			if converged_flag: break
 			# break if feedforward terms are sufficiently small
 
-
-		# ******** Functions to compute the Jacobians of the dynamics  ************
-		# A, B = self.dyn.get_jacobian_np(trajectory, controls)
-
-		# Returns the linearized 'A' and 'B' matrix of the ego vehicle around
-		# nominal trajectory and controls.
-
-		# Args:
-		# 	trajectory: np.ndarray, (dim_x, T) trajectory along the nominal trajectory.
-		# 	controls: np.ndarray, (dim_u, T) controls along the trajectory.
-
-		# Returns:
-		# 	A: np.ndarray, (dim_x, T) the Jacobian of the dynamics w.r.t. the state.
-		# 	B: np.ndarray, (dim_u, T) the Jacobian of the dynamics w.r.t. the control.
-		
-		# ******** Functions to roll the dynamics for one step  ************
-		# state_next, control_clip = self.dyn.integrate_forward_np(state, control)
-		
-		# Finds the next state of the vehicle given the current state and
-		# control input.
-
-		# Args:
-		# 	state: np.ndarray, (dim_x).
-		# 	control: np.ndarray, (dim_u).
-
-		# Returns:
-		# 	state_next: np.ndarray, (dim_x) next state.
-		# 	control_clip: np.ndarray, (dim_u) clipped control.
-		
-		# *** Functions to get total cost of a trajectory and control sequence  ***
-		# J = self.cost.get_traj_cost(trajectory, controls, path_refs, obs_refs)
-		# Given the trajectory, control seq, and references, return the sum of the cost.
-		# Input:
-		# 	trajectory: (dim_x, T) array of state trajectory
-		# 	controls:   (dim_u, T) array of control sequence
-		# 	path_refs:  (dim_ref, T) array of references (e.g. reference path, reference velocity, etc.)
-		# 	obs_refs: *Optional* (num_obstacle, (2, T)) List of obstacles. Default to None
-		# return:
-		# 	cost: float, sum of the running cost over the trajectory
-
-  		# ******** Functions to get jacobian and hessian of the cost ************
-		# q, r, Q, R, H = self.cost.get_derivatives_np(trajectory, controls, path_refs, obs_refs)
-		
-		# Given the trajectory, control seq, and references, return Jacobians and Hessians of cost function
-		# Input:
-		# 	trajectory: (dim_x, T) array of state trajectory
-		# 	controls:   (dim_u, T) array of control sequence
-		# 	path_refs:  (dim_ref, T) array of references (e.g. reference path, reference velocity, etc.)
-		# 	obs_refs: *Optional* (num_obstacle, (2, T)) List of obstacles. Default to None
-		# return:
-		# 	q: np.ndarray, (dim_x, T) jacobian of cost function w.r.t. states
-        #   r: np.ndarray, (dim_u, T) jacobian of cost function w.r.t. controls
-        #   Q: np.ndarray, (dim_x, dim_u, T) hessian of cost function w.r.t. states
-        #   R: np.ndarray, (dim_u, dim_u, T) hessian of cost function w.r.t. controls
-        #   H: np.ndarray, (dim_x, dim_u, T) hessian of cost function w.r.t. states and controls
-		
 		########################### #END of TODO 1 #####################################
 
 		t_process = time.time() - t_start
 		solver_info = dict(
 				t_process=t_process, # Time spent on planning
-				trajectory = trajectory,
+				trajectory = x_nom,
 				controls = controls,
-				status=None, #	TODO: Fill this in
-				K_closed_loop=None, # TODO: Fill this in
-				k_open_loop=None # TODO: Fill this in
-				# Optional TODO: Fill in other information you want to return
+				status= (-1,0)[converged_flag],
+				K_closed_loop=K,
+				k_open_loop=k
 		)
 		return solver_info
 
