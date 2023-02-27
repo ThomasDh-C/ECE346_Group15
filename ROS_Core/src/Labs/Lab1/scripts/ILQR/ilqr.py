@@ -266,7 +266,7 @@ class ILQR():
         converged_flag = False
         K, k = None, None
         lambda_val = 1
-        while steps <= 100:
+        while steps <= self.max_iter:
             # Backward pass
             # JAX arrays are immutable. Instead of ``x[idx] = y``, use ``x = x.at[idx].set(y)`` or another .at[] method: https://jax.readthedocs.io/en/latest/_autosummary/jax.numpy.ndarray.at.html
             K, k, lambda_val = self.backward_pass(x_nom, u_nom, lambda_val)
@@ -275,29 +275,44 @@ class ILQR():
             for alpha_curr in self.alphas:
                 # 1. Rolls out the nominal x_nom (implemented) and gets the initial cost.
                 # update controls
-                x = jnp.zeros_like(x_nom)
+                x = jnp.copy(x_nom)
                 for t in range(self.T - 1):
+                    dx = x[:, t] - x_nom[:, t]
+                    dx = dx.at[3].set(jnp.arctan2(jnp.sin(dx[3]), jnp.cos(dx[3])))
                     controls_temp = u_nom[:, t] + jnp.matmul(
-                        K[:, :, t], (x[:, t] - x_nom[:, t])) + (alpha_curr * k[:, t])
+                        K[:, :, t], dx) + (alpha_curr * k[:, t])
                     controls = controls.at[:, t].set(controls_temp)
                     x_temp, u_clip = self.dyn.integrate_forward_jax(
                         x[:, t], controls[:, t])
                     x = x.at[:, t+1].set(x_temp)
 
-                    controls = controls.at[:, t].set(u_clip) # ran controls with clipped controls anyways
+                    # ran controls with clipped controls anyways
+                    controls = controls.at[:, t].set(u_clip)
 
                 # 2. Get the initial cost of the x_nom.
+                # save references of objects you may hit/ needed for compute for backward pass
+                # @partial(jax.jit, static_argnums=(0,)) --> for things you wanna jit
+                # regular functions that aren't in your class just @jax.jit decorator
+                # make sure your inptus are always same shape
+                # while, for and if are special in jax --> have conditional function
+                # no slicing outside of jitted functions
+                # if line search fail, can try larger lambda value in backward pass (multiply and try again)
+                # check self parameters for backward pass
+                # get speed for plan one step to 0.1s
                 Jnew = self.compute_new_cost(x, controls)
-
-                print("Jorig: ", Jorig)
-                print("Jnew: ", Jnew)
-                print('J difference: ', jnp.abs(Jnew - Jorig))
-
-                if jnp.abs(Jnew - Jorig) < 0.1:  # arbitrary value
+                if Jnew < Jorig:
+                    print("Jorig: ", Jorig)
+                    print("Jnew: ", Jnew)
+                    print('J difference: ', jnp.abs(Jnew - Jorig))
+                    if jnp.abs(Jnew - Jorig) < 0.01:
+                        converged_flag = True
                     x_nom = x
-                    k = k * alpha_curr
-                    converged_flag = True
+                    u_nom = controls
+                    # k = k * alpha_curr ... told didn't need this
+                    Jorig = Jnew
                     break
+                else:
+                    print("Jorig: ", Jorig, "Jnew: ", Jnew, "alpha", alpha_curr)
 
             steps += 1
             if converged_flag:
