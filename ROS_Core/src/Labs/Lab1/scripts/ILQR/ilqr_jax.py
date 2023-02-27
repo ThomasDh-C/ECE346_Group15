@@ -17,7 +17,7 @@ status_lookup = ['Iteration Limit Exceed',
                  'Failed Line Search']
 
 
-class ILQR():
+class ILQRJax():
     def __init__(self, config_file=None) -> None:
 
         self.config = Config()  # Load default config.
@@ -158,11 +158,11 @@ class ILQR():
 
         # Get path and obstacle references based on your current nominal trajectory.
         path_refs, obs_refs = self.get_references(x_nom)
-        q, r, Q, R, H = self.cost.get_derivatives_np(
+        q, r, Q, R, H = self.cost.get_derivatives_jax(
             x_nom, u_nom, path_refs, obs_refs)
         A, B = self.dyn.get_jacobian_np(x_nom, u_nom)
-        k_open_loop = np.zeros((2, self.T))
-        K_closed_loop = np.zeros((2, 5, self.T))
+        k_open_loop = jnp.zeros((2, self.T))
+        K_closed_loop = jnp.zeros((2, 5, self.T))
 
         # Derivative of value function at final step
         end_t_idx = self.T - 1
@@ -171,47 +171,47 @@ class ILQR():
         t = end_t_idx - 1
         lambda_a = 5  # Arbitrary - just has to be over 1
         while t >= 0:
-            Q_x = q[:, t] + np.matmul(A[:, :, t].T, p)
-            Q_u = r[:, t] + np.matmul(B[:, :, t].T, p)
+            Q_x = q[:, t] + jnp.matmul(A[:, :, t].T, p)
+            Q_u = r[:, t] + jnp.matmul(B[:, :, t].T, p)
             Q_xx = Q[:, :, t] + \
-                np.matmul(A[:, :, t].T, np.matmul(P, A[:, :, t]))
+                jnp.matmul(A[:, :, t].T, jnp.matmul(P, A[:, :, t]))
             Q_uu = R[:, :, t] + \
-                np.matmul(B[:, :, t].T, np.matmul(P, B[:, :, t]))
+                jnp.matmul(B[:, :, t].T, jnp.matmul(P, B[:, :, t]))
             Q_ux = H[:, :, t] + \
-                np.matmul(B[:, :, t].T, np.matmul(P, A[:, :, t]))
+                jnp.matmul(B[:, :, t].T, jnp.matmul(P, A[:, :, t]))
             # Add regularization
-            reg_matrix = lambda_val * np.eye(5)
+            reg_matrix = lambda_val * jnp.eye(5)
             Q_uu_reg = R[:, :, t] + \
-                np.matmul(B[:, :, t].T, np.matmul(
+                jnp.matmul(B[:, :, t].T, jnp.matmul(
                     (P+reg_matrix), B[:, :, t]))
             Q_ux_reg = H[:, :, t] + \
-                np.matmul(B[:, :, t].T, np.matmul(
+                jnp.matmul(B[:, :, t].T, jnp.matmul(
                     (P+reg_matrix), A[:, :, t]))
             # Check if Q_uu_reg is positive definite
-            if not np.all(np.linalg.eigvals(Q_uu_reg) > 0) and lambda_val < 1e5:
+            if not jnp.all(jnp.linalg.eigvals(Q_uu_reg) > 0) and lambda_val < 1e5:
                 lambda_val *= lambda_a
                 t = end_t_idx - 1  # restart from end of trajectory
                 p = q[:, end_t_idx]
                 P = Q[:, :, end_t_idx]
                 continue
 
-            Q_uu_reg_inv = np.linalg.inv(Q_uu_reg)
+            Q_uu_reg_inv = jnp.linalg.inv(Q_uu_reg)
 
             # Calculate policy
 
-            k = np.matmul(-Q_uu_reg_inv, Q_u)
-            k_open_loop[:, t] = k
+            k = jnp.matmul(-Q_uu_reg_inv, Q_u)
+            k_open_loop = k_open_loop.at[:, t].set(k)
 
-            K = np.matmul(-Q_uu_reg_inv, Q_ux_reg)
-            K_closed_loop[:, :, t] = K
+            K = jnp.matmul(-Q_uu_reg_inv, Q_ux_reg)
+            K_closed_loop = K_closed_loop.at[:, :, t].set(K)
 
             # Update value function derivative for the previous time step
-            p = Q_x + np.matmul(K.T, np.matmul(Q_uu, k)) + \
-                np.matmul(K.T, Q_u) + np.matmul(Q_ux.T, k)
+            p = Q_x + jnp.matmul(K.T, jnp.matmul(Q_uu, k)) + \
+                jnp.matmul(K.T, Q_u) + jnp.matmul(Q_ux.T, k)
             P = Q_xx + \
-                np.matmul(K.T, np.matmul(Q_uu, K)) + \
-                np.matmul(K.T, Q_ux) + \
-                np.matmul(Q_ux.T, K)
+                jnp.matmul(K.T, jnp.matmul(Q_uu, K)) + \
+                jnp.matmul(K.T, Q_ux) + \
+                jnp.matmul(Q_ux.T, K)
             t -= 1
 
         lambda_val = max(1e-5, lambda_val*0.5)
@@ -249,8 +249,8 @@ class ILQR():
         t_start = time.time()
 
         # 1. Rolls out the nominal x_nom (implemented) and gets the initial cost.
-        x_nom, u_nom = self.dyn.rollout_nominal_np(init_state, u_nom)
-        controls = np.copy(u_nom)  # initialize for later :)
+        x_nom, u_nom = self.dyn.rollout_nominal_jax(init_state, u_nom)
+        controls = u_nom  # initialize for later :)
 
         # 2. Get the initial cost of the x_nom.
         Jorig = self.compute_new_cost(x_nom, u_nom)
@@ -275,19 +275,19 @@ class ILQR():
             for alpha_curr in self.alphas:
                 # 1. Rolls out the nominal x_nom (implemented) and gets the initial cost.
                 # update controls
-                x = np.copy(x_nom)
+                x = jnp.copy(x_nom)
                 for t in range(self.T - 1):
                     dx = x[:, t] - x_nom[:, t]
-                    dx[3] = np.arctan2(np.sin(dx[3]), np.cos(dx[3]))
-                    controls_temp = u_nom[:, t] + np.matmul(
+                    dx = dx.at[3].set(jnp.arctan2(jnp.sin(dx[3]), jnp.cos(dx[3])))
+                    controls_temp = u_nom[:, t] + jnp.matmul(
                         K[:, :, t], dx) + (alpha_curr * k[:, t])
-                    controls[:, t] = controls_temp
-                    x_temp, u_clip = self.dyn.integrate_forward_np(
+                    controls = controls.at[:, t].set(controls_temp)
+                    x_temp, u_clip = self.dyn.integrate_forward_jax(
                         x[:, t], controls[:, t])
-                    x[:, t+1] = x_temp
+                    x = x.at[:, t+1].set(x_temp)
 
                     # ran controls with clipped controls anyways
-                    controls[:, t] = u_clip
+                    controls = controls.at[:, t].set(u_clip)
 
                 # 2. Get the initial cost of the x_nom.
                 # save references of objects you may hit/ needed for compute for backward pass
@@ -301,12 +301,17 @@ class ILQR():
                 # get speed for plan one step to 0.1s
                 Jnew = self.compute_new_cost(x, controls)
                 if Jnew < Jorig:
-                    if np.abs(Jnew - Jorig) < 0.01:
+                    print("Jorig: ", Jorig)
+                    print("Jnew: ", Jnew)
+                    print('J difference: ', jnp.abs(Jnew - Jorig))
+                    if jnp.abs(Jnew - Jorig) < 0.01:
                         converged_flag = True
                     x_nom = x
-                    u_nom = np.copy(controls)
+                    u_nom = controls
                     Jorig = Jnew
                     break
+                else:
+                    print("Jorig: ", Jorig, "Jnew: ", Jnew, "alpha", alpha_curr)
 
             steps += 1
             if converged_flag:
@@ -314,6 +319,7 @@ class ILQR():
             # break if feedforward terms are sufficiently small
 
         ########################### #END of TODO 1 #####################################
+        print("Converged? ", converged_flag)
         t_process = time.time() - t_start
         solver_info = dict(
             t_process=t_process,  # Time spent on planning
