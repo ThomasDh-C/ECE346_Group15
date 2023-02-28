@@ -224,10 +224,10 @@ class TrajectoryPlanner():
         ###############################
         # Implement your control law here using ILQR policy
         # Hint: make sure that the difference in heading is between [-pi, pi]
-        x[3] = np.arctan2(np.sin(x[3]), np.cos(x[3]))  # heading thing
-        x_ref[3] = np.arctan2(
-            np.sin(x_ref[3]), np.cos(x_ref[3]))  # heading thing
-        u_t = u_ref + K_closed_loop @ (x - x_ref)
+
+        dx = x - x_ref
+        dx[3] = np.arctan2(np.sin(dx[3]), np.cos(dx[3]))  # heading thing
+        u_t = u_ref + K_closed_loop @ dx
 
         accel = u_t[0]
         steer_rate = u_t[1]
@@ -399,7 +399,7 @@ class TrajectoryPlanner():
                 # stop when the progress is not increasing
                 while (progress - prev_progress)*new_path.length > 1e-3:
                     nominal_trajectory.append(state)
-                    new_plan = self.planner.plan(state, None, verbose=False)
+                    new_plan = self.planner.plan(state, None)
                     nominal_controls.append(new_plan['controls'][:, 0])
                     K_closed_loop.append(new_plan['K_closed_loop'][:, :, 0])
 
@@ -472,9 +472,12 @@ class TrajectoryPlanner():
             '''
 
             # Check if we need to replan
+            curr_time = rospy.get_rostime().to_sec()
             if self.plan_state_buffer.new_data_available \
-                and (t_last_replan - rospy.get_rostime().to_sec()) > self.replan_dt \
+                and (curr_time - t_last_replan) > self.replan_dt \
                 and self.planner_ready:
+
+                t_last_replan = curr_time
 
                 # Plan!
                 x_cur = self.plan_state_buffer.readFromRT()
@@ -482,18 +485,18 @@ class TrajectoryPlanner():
                 u_init = policy.get_ref_controls(rospy.get_rostime().to_sec()) # assume function takes care if first policy
                 if self.path_buffer.new_data_available():
                     self.planner.update_ref_path(self.path_buffer.readFromRT())
-                    # Replan using ilqr
-                    new_plan = self.planner.plan(x_cur, u_init)
-                    if new_plan['status'] == 0:
-                        new_policy = Policy(X=new_plan['x_nom'], 
-                                        U=new_plan['controls'], 
-                                        K=new_plan['K_closed_loop'], 
-                                        t0=rospy.get_rostime().to_sec(), 
-                                        dt=self.planner.dt, 
-                                        T=new_plan['x_nom'].shape[-1])
+                # Replan using ilqr
+                new_plan = self.planner.plan(x_cur, u_init)
+                if new_plan['status'] == 0:
+                    new_policy = Policy(X=new_plan['x_nom'], 
+                                    U=new_plan['controls'], 
+                                    K=new_plan['K_closed_loop'], 
+                                    t0=rospy.get_rostime().to_sec(), 
+                                    dt=self.planner.dt, 
+                                    T=new_plan['x_nom'].shape[-1])
 
-                        self.policy_buffer.writeFromNonRT(new_policy)
-                        self.trajectory_pub.publish(new_policy.to_msg()) 
+                    self.policy_buffer.writeFromNonRT(new_policy)
+                    self.trajectory_pub.publish(new_policy.to_msg())
             ###############################
             #### END OF TODO #############
             ###############################
