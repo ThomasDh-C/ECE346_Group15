@@ -37,7 +37,7 @@ class Policy():
         distance = np.linalg.norm(self.nominal_X[:2,:].T-x[:2], axis=1)
         i = np.argmin(distance)
         
-        if distance[i] > 0.2:
+        if distance[i] > 1.0:
             return None, None, None
         
         x_i = self.nominal_X[:,i]
