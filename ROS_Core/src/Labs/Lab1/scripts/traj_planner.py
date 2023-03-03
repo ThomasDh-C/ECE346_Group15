@@ -494,7 +494,7 @@ class TrajectoryPlanner():
                     new_policy = Policy(X=new_plan['trajectory'],
                                         U=new_plan['controls'],
                                         K=new_plan['K_closed_loop'],
-                                        t0=rospy.get_rostime().to_sec(),
+                                        t0=x_cur[-1],
                                         dt=self.planner.dt,
                                         T=new_plan['trajectory'].shape[-1])
 
