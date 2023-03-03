@@ -25,7 +25,8 @@
 1. RUNNING CONTROL PROGRAM OPTION 2: On truck (terminal 2)
     1. assume connected to ECE346 wifi from above and `ssh nvidia@192.168.1.215` --> nvidia
     2. `cd ~/Documents/ECE346/ROS_Core`
-    3. `source network_ros_host.sh 192.168.1.215`
-    4. `source devel/setup.bash`
-    5. `catkin_make` if you have new packages
-    6. `[ROSLAUNCH YOUR PROGRAM]` ... written as roslaunch < ROS Package > < Launch File >
+    3. `git submodule update --init --recursive`
+    4. `source network_ros_host.sh 192.168.1.215`
+    5. `source devel/setup.bash`
+    6. `catkin_make` if you have new packages
+    7. `[ROSLAUNCH YOUR PROGRAM]` ... written as roslaunch < ROS Package > < Launch File >
