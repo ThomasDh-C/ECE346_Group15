@@ -9,7 +9,8 @@ from .cost import Cost, CollisionChecker, Obstacle
 from .ref_path import RefPath
 from .config import Config
 import time
-
+from jax.lax import fori_loop
+from functools import partial
 import jax.numpy as jnp
 
 status_lookup = ['Iteration Limit Exceed',
@@ -219,6 +220,45 @@ class ILQR():
         lambda_val = max(1e-5, lambda_val*0.5)
         return K_closed_loop, k_open_loop, lambda_val
 
+    def line_search(self, x, x_nom, u_nom, controls, alpha_curr, k, K):
+
+        for t in range(self.T - 1):
+            dx = x[:, t] - x_nom[:, t]
+            dx[3] = np.arctan2(np.sin(dx[3]), np.cos(dx[3]))
+            controls_temp = u_nom[:, t] + np.matmul(
+                K[:, :, t], dx) + (alpha_curr * k[:, t])
+            x[:, t+1], u_clip = self.dyn.integrate_forward_np(
+                x[:, t], controls_temp)
+
+            # ran controls with clipped controls anyways
+            controls[:, t] = u_clip
+        return x, controls
+
+        # ########## x.at[idx].set(y)
+    @partial(jax.jit, static_argnums=(0,))
+    def line_search_jax(self, x: np.ndarray, x_nom: np.ndarray, u_nom: np.ndarray, controls: np.ndarray, alpha_curr: float, k: np.ndarray, K: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        @jax.jit
+        def body_line_search_jax(t, args):
+            x, x_nom, u_nom, controls, alpha_curr, k, K = args
+            dx = x[:, t] - x_nom[:, t]
+            dx = dx.at[3].set(jnp.arctan2(jnp.sin(dx[3]), jnp.cos(dx[3])))
+            controls_temp = u_nom[:, t] + jnp.matmul(
+                K[:, :, t], dx) + (alpha_curr * k[:, t])
+            x_temp, u_clip = self.dyn.integrate_forward_jax(
+                x[:, t], controls_temp)
+            x = x.at[:, t+1].set(x_temp)
+            controls = controls.at[:, t].set(u_clip)
+            # print('hello from deeeeeeep inside')
+            return x, x_nom, u_nom, controls, alpha_curr, k, K
+
+        x[:, 0] = jnp.copy(x_nom[:, 0])
+        _, _, _, _, _, _, _ = jax.lax.fori_loop(0, self.T-1, body_line_search_jax,
+                                                (x, x_nom, u_nom, controls, alpha_curr, k, K))
+        # print('in between world')
+        # x = x.set(temp_x)
+        # print('hello from the inside')
+        return x, controls
+
     def plan(self, init_state: np.ndarray,
              u_nom: Optional[np.ndarray] = None) -> Dict:
         '''
@@ -271,6 +311,7 @@ class ILQR():
         K, k = None, None
         lambda_val = 1
 
+        x = np.zeros_like(x_nom)
         while steps <= self.max_iter:
             # Backward pass
             # JAX arrays are immutable. Instead of ``x[idx] = y``, use ``x = x.at[idx].set(y)`` or another .at[] method: https://jax.readthedocs.io/en/latest/_autosummary/jax.numpy.ndarray.at.html
@@ -290,9 +331,11 @@ class ILQR():
             t_forward = time.time()
             improved_flag = False
             for alpha_curr in self.alphas:
-                # 1. Rolls out the nominal x_nom
-                # update controls
-                x = np.zeros_like(x_nom)
+                # print('hello')
+                # x, controls = self.line_search(
+                #     x, x_nom, u_nom, controls, alpha_curr, k, K)
+                # # 1. Rolls out the nominal x_nom
+                # # update controls
                 x[:, 0] = x_nom[:, 0]
                 for t in range(self.T - 1):
                     dx = x[:, t] - x_nom[:, t]
@@ -318,9 +361,9 @@ class ILQR():
                 Jnew = self.compute_new_cost(x, controls)
                 if Jnew < Jorig:
                     improved_flag = True
-                    if np.abs(Jnew - Jorig) < 0.1:
+                    if np.abs(Jnew - Jorig) < .1:
                         converged_flag = True
-                    x_nom = x
+                    x_nom = np.copy(x)
                     u_nom = np.copy(controls)
                     Jorig = Jnew
                     break
@@ -329,11 +372,11 @@ class ILQR():
             if converged_flag:
                 break
             # break if feedforward terms are sufficiently small
-            print(f't_forward pass: {1000*(time.time() - t_forward):.2f}ms')
-            print(f'Converged in {steps} iterations')
+            # print(f't_forward pass: {1000*(time.time() - t_forward):.2f}ms')
+            # print(f'Converged in {steps} iterations')
         ########################### #END of TODO 1 #####################################
         t_process = time.time() - t_start
-        print(f't_process: {t_process*1000:.2f}ms')
+        # print(f't_process: {t_process*1000:.2f}ms')
         solver_info = dict(
             t_process=t_process,  # Time spent on planning
             trajectory=x_nom,
