@@ -266,12 +266,17 @@ class ILQR():
         converged_flag = False
         K, k = None, None
         lambda_val = 1
+
         while steps <= self.max_iter:
             # Backward pass
             # JAX arrays are immutable. Instead of ``x[idx] = y``, use ``x = x.at[idx].set(y)`` or another .at[] method: https://jax.readthedocs.io/en/latest/_autosummary/jax.numpy.ndarray.at.html
+            
+            t_backward = time.time()
             K, k, lambda_val = self.backward_pass(x_nom, u_nom, lambda_val)
+            print('t_backward pass: ', time.time() - t_backward)
 
             # Forward pass
+            t_forward = time.time()
             for alpha_curr in self.alphas:
                 # 1. Rolls out the nominal x_nom (implemented) and gets the initial cost.
                 # update controls
@@ -312,9 +317,10 @@ class ILQR():
             if converged_flag:
                 break
             # break if feedforward terms are sufficiently small
-
+            print('t_forward pass: ', time.time() - t_backward)
         ########################### #END of TODO 1 #####################################
         t_process = time.time() - t_start
+        print('t_process: ', t_process)
         solver_info = dict(
             t_process=t_process,  # Time spent on planning
             trajectory=x_nom,
