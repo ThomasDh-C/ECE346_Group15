@@ -171,22 +171,24 @@ class ILQR():
         t = end_t_idx - 1
         lambda_a = 5  # Arbitrary - just has to be over 1
         while t >= 0:
-            Q_x = q[:, t] + np.matmul(A[:, :, t].T, p)
-            Q_u = r[:, t] + np.matmul(B[:, :, t].T, p)
+            A_curr = A[:, :, t]
+            B_curr = B[:, :, t]
+            Q_x = q[:, t] + np.matmul(A_curr.T, p)
+            Q_u = r[:, t] + np.matmul(B_curr.T, p)
             Q_xx = Q[:, :, t] + \
-                np.matmul(A[:, :, t].T, np.matmul(P, A[:, :, t]))
+                np.matmul(A_curr.T, np.matmul(P, A_curr))
             Q_uu = R[:, :, t] + \
-                np.matmul(B[:, :, t].T, np.matmul(P, B[:, :, t]))
+                np.matmul(B_curr.T, np.matmul(P, B_curr))
             Q_ux = H[:, :, t] + \
-                np.matmul(B[:, :, t].T, np.matmul(P, A[:, :, t]))
+                np.matmul(B_curr.T, np.matmul(P, A_curr))
             # Add regularization
             reg_matrix = lambda_val * np.eye(5)
             Q_uu_reg = R[:, :, t] + \
-                np.matmul(B[:, :, t].T, np.matmul(
-                    (P+reg_matrix), B[:, :, t]))
+                np.matmul(B_curr.T, np.matmul(
+                    (P+reg_matrix), B_curr))
             Q_ux_reg = H[:, :, t] + \
-                np.matmul(B[:, :, t].T, np.matmul(
-                    (P+reg_matrix), A[:, :, t]))
+                np.matmul(B_curr.T, np.matmul(
+                    (P+reg_matrix), A_curr))
             # Check if Q_uu_reg is positive definite
             if not np.all(np.linalg.eigvals(Q_uu_reg) > 0) and lambda_val < 1e5:
                 lambda_val *= lambda_a
@@ -251,9 +253,11 @@ class ILQR():
         # 1. Rolls out the nominal x_nom (implemented) and gets the initial cost.
         x_nom, u_nom = self.dyn.rollout_nominal_np(init_state, u_nom)
         controls = np.copy(u_nom)  # initialize for later :)
+        improved_flag = True  # again init for later
 
         # 2. Get the initial cost of the x_nom.
-        Jorig = self.compute_new_cost(x_nom, u_nom)
+        path_refs, obs_refs = self.get_references(x_nom)
+        Jorig = self.cost.get_traj_cost(x_nom, u_nom, path_refs, obs_refs)
 
         ##########################################################################
         # TODO 1: Implement the ILQR algorithm. Feel free to add any helper functions.
@@ -270,32 +274,39 @@ class ILQR():
         while steps <= self.max_iter:
             # Backward pass
             # JAX arrays are immutable. Instead of ``x[idx] = y``, use ``x = x.at[idx].set(y)`` or another .at[] method: https://jax.readthedocs.io/en/latest/_autosummary/jax.numpy.ndarray.at.html
-            
             t_backward = time.time()
+            # if not improved_flag:
+            #     lambda_val *= 5
+            #     if lambda_val > 1000:
+            #         print('hit the big lambda')
+            #         lambda_val = 1000
+            #         # break
+            # else:
+            #     lambda_val = 1
             K, k, lambda_val = self.backward_pass(x_nom, u_nom, lambda_val)
-            print('t_backward pass: ', time.time() - t_backward)
+            print(f't_backward pass: {1000*(time.time() - t_backward):.2f}ms')
 
             # Forward pass
             t_forward = time.time()
+            improved_flag = False
             for alpha_curr in self.alphas:
-                # 1. Rolls out the nominal x_nom (implemented) and gets the initial cost.
+                # 1. Rolls out the nominal x_nom
                 # update controls
-                x = np.copy(x_nom)
+                x = np.zeros_like(x_nom)
+                x[:, 0] = x_nom[:, 0]
                 for t in range(self.T - 1):
                     dx = x[:, t] - x_nom[:, t]
                     dx[3] = np.arctan2(np.sin(dx[3]), np.cos(dx[3]))
                     controls_temp = u_nom[:, t] + np.matmul(
                         K[:, :, t], dx) + (alpha_curr * k[:, t])
-                    controls[:, t] = controls_temp
-                    x_temp, u_clip = self.dyn.integrate_forward_np(
-                        x[:, t], controls[:, t])
-                    x[:, t+1] = x_temp
+                    x[:, t+1], u_clip = self.dyn.integrate_forward_np(
+                        x[:, t], controls_temp)
 
                     # ran controls with clipped controls anyways
                     controls[:, t] = u_clip
 
                 # 2. Get the initial cost of the x_nom.
-                # save references of objects you may hit/ needed for compute for backward pass
+                # ?? - save references of objects you may hit/ needed for compute for backward pass
                 # @partial(jax.jit, static_argnums=(0,)) --> for things you wanna jit
                 # regular functions that aren't in your class just @jax.jit decorator
                 # make sure your inptus are always same shape
@@ -306,7 +317,8 @@ class ILQR():
                 # get speed for plan one step to 0.1s
                 Jnew = self.compute_new_cost(x, controls)
                 if Jnew < Jorig:
-                    if np.abs(Jnew - Jorig) < 0.01:
+                    improved_flag = True
+                    if np.abs(Jnew - Jorig) < 0.1:
                         converged_flag = True
                     x_nom = x
                     u_nom = np.copy(controls)
@@ -317,10 +329,11 @@ class ILQR():
             if converged_flag:
                 break
             # break if feedforward terms are sufficiently small
-            print('t_forward pass: ', time.time() - t_backward)
+            print(f't_forward pass: {1000*(time.time() - t_forward):.2f}ms')
+            print(f'Converged in {steps} iterations')
         ########################### #END of TODO 1 #####################################
         t_process = time.time() - t_start
-        print('t_process: ', t_process)
+        print(f't_process: {t_process*1000:.2f}ms')
         solver_info = dict(
             t_process=t_process,  # Time spent on planning
             trajectory=x_nom,
