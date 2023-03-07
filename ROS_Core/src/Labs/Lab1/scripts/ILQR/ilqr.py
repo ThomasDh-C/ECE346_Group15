@@ -250,7 +250,7 @@ class ILQR():
             # print('hello from deeeeeeep inside')
             return x, x_nom, u_nom, controls, alpha_curr, k, K
 
-        x[:, 0] = jnp.copy(x_nom[:, 0])
+        # x[:, 0] = jnp.at.set(x_nom[:, 0])
         _, _, _, _, _, _, _ = jax.lax.fori_loop(0, self.T-1, body_line_search_jax,
                                                 (x, x_nom, u_nom, controls, alpha_curr, k, K))
         # print('in between world')
