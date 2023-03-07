@@ -471,35 +471,31 @@ class TrajectoryPlanner():
                 - Publish the new policy for RVIZ visualization
                     for example: self.trajectory_pub.publish(new_policy.to_msg())
             '''
-
-            curr_time = rospy.get_rostime().to_sec()
-            if self.plan_state_buffer.new_data_available \
-                    and (curr_time - t_last_replan) > self.replan_dt \
-                    and self.planner_ready:
-                # Plan!
+            if self.plan_state_buffer.new_data_available and self.planner_ready:
                 x_cur = self.plan_state_buffer.readFromRT()
-                policy = self.policy_buffer.readFromRT()
-                # assume function takes care if first policy
-                u_init = None
-                if policy != None:
-                    u_init = policy.get_ref_controls(
-                        rospy.get_rostime().to_sec())
-                if self.path_buffer.new_data_available:
-                    self.planner.update_ref_path(self.path_buffer.readFromRT())
-                # Replan using ilqr
-                new_plan = self.planner.plan(x_cur[:-1], u_init)
+                if (x_cur[-1] - t_last_replan) > self.replan_dt:
+                    # Plan!
+                    policy = self.policy_buffer.readFromRT()
+                    # assume function takes care if first policy
+                    u_init = None
+                    if policy != None:
+                        u_init = policy.get_ref_controls(x_cur[-1])
+                    if self.path_buffer.new_data_available:
+                        self.planner.update_ref_path(self.path_buffer.readFromRT())
+                    # Replan using ilqr
+                    new_plan = self.planner.plan(x_cur[:-1], u_init)
 
-                if new_plan['status'] == 0:
-                    t_last_replan = curr_time
-                    new_policy = Policy(X=new_plan['trajectory'],
-                                        U=new_plan['controls'],
-                                        K=new_plan['K_closed_loop'],
-                                        t0=x_cur[-1],
-                                        dt=self.planner.dt,
-                                        T=new_plan['trajectory'].shape[-1])
+                    if new_plan['status'] == 0:
+                        t_last_replan = x_cur[-1]
+                        new_policy = Policy(X=new_plan['trajectory'],
+                                            U=new_plan['controls'],
+                                            K=new_plan['K_closed_loop'],
+                                            t0=x_cur[-1],
+                                            dt=self.planner.dt,
+                                            T=self.planner.T)
 
-                    self.policy_buffer.writeFromNonRT(new_policy)
-                    self.trajectory_pub.publish(new_policy.to_msg())
+                        self.policy_buffer.writeFromNonRT(new_policy)
+                        self.trajectory_pub.publish(new_policy.to_msg())
             ###############################
             #### END OF TODO #############
             ###############################
