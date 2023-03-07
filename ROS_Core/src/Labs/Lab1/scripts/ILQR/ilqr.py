@@ -143,7 +143,7 @@ class ILQR():
         # Get the initial cost of the trajectory.
         return self.cost.get_traj_cost(trajectory, controls, path_refs, obs_refs)
 
-    def backward_pass(self, x_nom, u_nom, lambda_val=1):
+    def backward_pass(self, x_nom, u_nom, path_refs, obs_refs, lambda_val=1):
         ''' Run backward LQR pass
                 x_nom: 5xN matrix of trajectory
                 u_nom: 2xN matrix of nominal controls
@@ -158,7 +158,6 @@ class ILQR():
         # ported to jax + variables according to handout and slide names
 
         # Get path and obstacle references based on your current nominal trajectory.
-        path_refs, obs_refs = self.get_references(x_nom)
         q, r, Q, R, H = self.cost.get_derivatives_np(
             x_nom, u_nom, path_refs, obs_refs)
         A, B = self.dyn.get_jacobian_np(x_nom, u_nom)
@@ -232,7 +231,7 @@ class ILQR():
 
             # ran controls with clipped controls anyways
             controls[:, t] = u_clip
-        return x, controls
+        return np.copy(x), np.copy(controls)
 
         # ########## x.at[idx].set(y)
     @partial(jax.jit, static_argnums=(0,))
@@ -315,17 +314,14 @@ class ILQR():
         while steps <= self.max_iter:
             # Backward pass
             # JAX arrays are immutable. Instead of ``x[idx] = y``, use ``x = x.at[idx].set(y)`` or another .at[] method: https://jax.readthedocs.io/en/latest/_autosummary/jax.numpy.ndarray.at.html
-            t_backward = time.time()
-            # if not improved_flag:
-            #     lambda_val *= 5
-            #     if lambda_val > 1000:
-            #         print('hit the big lambda')
-            #         lambda_val = 1000
-            #         # break
-            # else:
-            #     lambda_val = 1
-            K, k, lambda_val = self.backward_pass(x_nom, u_nom, lambda_val)
-            print(f't_backward pass: {1000*(time.time() - t_backward):.2f}ms')
+            # t_backward = time.time()
+            if not improved_flag:
+                lambda_val *= 5
+                if lambda_val > 1000:
+                    break
+            K, k, lambda_val = self.backward_pass(
+                x_nom, u_nom, path_refs, obs_refs, lambda_val)
+            # print(f't_backward pass: {1000*(time.time() - t_backward):.2f}ms')
 
             # Forward pass
             t_forward = time.time()
@@ -358,10 +354,12 @@ class ILQR():
                 # if line search fail, can try larger lambda value in backward pass (multiply and try again)
                 # check self parameters for backward pass
                 # get speed for plan one step to 0.1s
-                Jnew = self.compute_new_cost(x, controls)
+                path_refs, obs_refs = self.get_references(x)
+                Jnew = self.cost.get_traj_cost(
+                    x, controls, path_refs, obs_refs)
                 if Jnew < Jorig:
                     improved_flag = True
-                    if np.abs(Jnew - Jorig) < .1:
+                    if np.abs(Jnew - Jorig) < self.config.tol:
                         converged_flag = True
                     x_nom = np.copy(x)
                     u_nom = np.copy(controls)
