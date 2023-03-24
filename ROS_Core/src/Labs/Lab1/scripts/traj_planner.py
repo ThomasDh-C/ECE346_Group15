@@ -21,7 +21,7 @@ from nav_msgs.msg import Odometry
 from nav_msgs.msg import Path as PathMsg
 from std_srvs.srv import Empty, EmptyResponse
 
-# You will use those for lab2   
+# You will use those for lab2
 from racecar_msgs.msg import OdometryArray
 from utils import frs_to_obstacle, frs_to_msg, get_obstacle_vertices, get_ros_param
 from visualization_msgs.msg import MarkerArray
@@ -37,6 +37,7 @@ class TrajectoryPlanner():
         # Indicate if the planner is used to generate a new trajectory
         self.update_lock = threading.Lock()
         self.latency = 0.0
+        self.static_obstacle_dict = {}
 
         self.read_parameters()
 
@@ -99,6 +100,10 @@ class TrajectoryPlanner():
             self.ilqr_params_abs_path = os.path.join(
                 self.package_path, ilqr_params_file)
 
+        # OUR STUFF
+        self.static_obs_topic = get_ros_param(
+            '~static_obs_topic', '/Obstacles/Static')
+
     def setup_planner(self):
         '''
         This function setup the ILQR solver
@@ -134,6 +139,11 @@ class TrajectoryPlanner():
             self.odom_topic, Odometry, self.odometry_callback, queue_size=10)
         self.path_sub = rospy.Subscriber(
             self.path_topic, PathMsg, self.path_callback, queue_size=10)
+
+        # OUR STUFF 2/34/23
+        self.static_obs_sub = rospy.Subscriber(
+            self.static_obs_topic, MarkerArray, self.static_obs_callback,
+            queue_size=10)
 
     def setup_service(self):
         '''
@@ -207,6 +217,13 @@ class TrajectoryPlanner():
         except:
             rospy.logwarn('Invalid path received! Move your robot and retry!')
 
+    def static_obs_callback(self, markers_msg):
+        '''3/24/23: our stuff, callback function for static obstacle topic'''
+        self.static_obstacle_dict = {}  # reset dict every call
+        for marker in markers_msg.markers:
+            idx, verts = get_obstacle_vertices(marker)
+            self.static_obstacle_dict[idx] = verts
+
     @staticmethod
     def compute_control(x, x_ref, u_ref, K_closed_loop):
         '''
@@ -278,9 +295,9 @@ class TrajectoryPlanner():
                 t_act = rospy.get_rostime().to_sec()
             else:
                 self.update_lock.acquire()
-                t_act = rospy.get_rostime().to_sec() + self.latency 
+                t_act = rospy.get_rostime().to_sec() + self.latency
                 self.update_lock.release()
-            
+
             # check if there is new state available
             if self.control_state_buffer.new_data_available:
                 odom_msg = self.control_state_buffer.readFromRT()
@@ -479,9 +496,12 @@ class TrajectoryPlanner():
                 - Publish the new policy for RVIZ visualization
                     for example: self.trajectory_pub.publish(new_policy.to_msg())
             '''
+
+            obstacles_list = [o for o in self.static_obstacle_dict.values()]
             if self.plan_state_buffer.new_data_available and self.planner_ready:
                 x_cur = self.plan_state_buffer.readFromRT()
                 if (x_cur[-1] - t_last_replan) > self.replan_dt:
+                    self.planner.update_obstacles(obstacles_list)
                     # Plan!
                     policy = self.policy_buffer.readFromRT()
                     # assume function takes care if first policy
@@ -489,7 +509,8 @@ class TrajectoryPlanner():
                     if policy != None:
                         u_init = policy.get_ref_controls(x_cur[-1])
                     if self.path_buffer.new_data_available:
-                        self.planner.update_ref_path(self.path_buffer.readFromRT())
+                        self.planner.update_ref_path(
+                            self.path_buffer.readFromRT())
                     # Replan using ilqr
                     new_plan = self.planner.plan(x_cur[:-1], u_init)
 
