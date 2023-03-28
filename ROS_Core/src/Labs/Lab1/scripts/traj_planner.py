@@ -497,7 +497,7 @@ class TrajectoryPlanner():
                     for example: self.trajectory_pub.publish(new_policy.to_msg())
             '''
 
-            obstacles_list = [o for o in self.static_obstacle_dict.values()]
+            obstacles_list = list(self.static_obstacle_dict.values())
             if self.plan_state_buffer.new_data_available and self.planner_ready:
                 x_cur = self.plan_state_buffer.readFromRT()
                 if (x_cur[-1] - t_last_replan) > self.replan_dt:
