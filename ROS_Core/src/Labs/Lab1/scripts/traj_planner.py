@@ -53,6 +53,19 @@ class TrajectoryPlanner():
 
         self.setup_service()
 
+        # client for get_frs service on node 'dyn_obstacle_node'
+        rospy.wait_for_service('/obstacles/get_frs')
+        try:
+            # clients don't have to init node. They just have to extract the function (GetFRS) from the previously created service '/obstacles/get_frs'
+            self.dyn_obstacles_client = rospy.ServiceProxy('/obstacles/get_frs', GetFRS)
+        except rospy.ServiceException as e:
+            print("\t########### Service call failed: %s"%e)
+
+        # publisher for frs_pub
+        self.frs_pub = rospy.Publisher('/vis/FRS’', MarkerArray, queue_size=10)
+        # rospy.init_node('frs_pub', anonymous=False)
+
+
         # start planning and control thread
         threading.Thread(target=self.control_thread).start()
         if not self.receding_horizon:
@@ -498,13 +511,33 @@ class TrajectoryPlanner():
             '''
 
             obstacles_list = list(self.static_obstacle_dict.values())
+
             if self.plan_state_buffer.new_data_available and self.planner_ready:
                 x_cur = self.plan_state_buffer.readFromRT()
                 if (x_cur[-1] - t_last_replan) > self.replan_dt:
+
+                    # Update obstacles with new static obstacles + dynamic obstacles from service
+                    frs_request =  x_cur[-1] + np.arange(self.planner.T)*self.planner.dt
+                    frs_response = self.dyn_obstacles_client(frs_request)
+                    dyn_obs = frs_to_obstacle(frs_response)
+
+                    obstacles_list.extend(dyn_obs)
+                    print("am I a list? obstacles_list[0]: ",type(obstacles_list[0]))
+                    print("am I a np array? obstacles_list[0][0]: ",type(obstacles_list[0][0]))
+                    print("np.array's shape: ", obstacles_list[0][0].shape)
+                    # print(" ### Obstacles list: ", obstacles_list)
+                    # for obs_list in dyn_obs:
+                    #     for obs in obs_list:
+                    #         # print("dyn obs", obs.tolist())
+                    #         obstacles_list.extend(obs.tolist())
+                    # print("Obstacles list", obstacles_list)
+                    # time.sleep(1)
+                    # obstacles_list = [ob if type(ob)==np.ndarray else np.array(ob) for ob in obstacles_list]
+
                     self.planner.update_obstacles(obstacles_list)
                     # Plan!
                     policy = self.policy_buffer.readFromRT()
-                    # assume function takes care if first policy
+                    # assume function takes care if first policy]
                     u_init = None
                     if policy != None:
                         u_init = policy.get_ref_controls(x_cur[-1])
@@ -525,6 +558,9 @@ class TrajectoryPlanner():
 
                         self.policy_buffer.writeFromNonRT(new_policy)
                         self.trajectory_pub.publish(new_policy.to_msg())
+                    
+                    # frs_to_msg
+                    self.frs_pub.publish(frs_to_msg(frs_response))
             ###############################
             #### END OF TODO #############
             ###############################
