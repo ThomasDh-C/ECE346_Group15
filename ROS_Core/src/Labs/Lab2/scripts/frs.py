@@ -175,6 +175,7 @@ class FRS():
             zonotopes = multistep_zonotope_reachset(init_box, a_hat_mat, self.b_mat, input_box, dt_list, quick=True)
             
             # max in x
+            # print(len(zonotopes))
             d_max = np.max(np.array(zonotopes[-1].verts())[:,0])+0.3
             reachable_routes = self.lanelet_map.get_reachable_path(start_id, s_start, d_max, False)
             

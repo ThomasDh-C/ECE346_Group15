@@ -62,7 +62,7 @@ class TrajectoryPlanner():
             print("\t########### Service call failed: %s"%e)
 
         # publisher for frs_pub
-        self.frs_pub = rospy.Publisher('/vis/FRS’', MarkerArray, queue_size=10)
+        self.frs_pub = rospy.Publisher('/vis/FRS', MarkerArray, queue_size=10)
         # rospy.init_node('frs_pub', anonymous=False)
 
 
@@ -520,20 +520,7 @@ class TrajectoryPlanner():
                     frs_request =  x_cur[-1] + np.arange(self.planner.T)*self.planner.dt
                     frs_response = self.dyn_obstacles_client(frs_request)
                     dyn_obs = frs_to_obstacle(frs_response)
-
                     obstacles_list.extend(dyn_obs)
-                    print("am I a list? obstacles_list[0]: ",type(obstacles_list[0]))
-                    print("am I a np array? obstacles_list[0][0]: ",type(obstacles_list[0][0]))
-                    print("np.array's shape: ", obstacles_list[0][0].shape)
-                    # print(" ### Obstacles list: ", obstacles_list)
-                    # for obs_list in dyn_obs:
-                    #     for obs in obs_list:
-                    #         # print("dyn obs", obs.tolist())
-                    #         obstacles_list.extend(obs.tolist())
-                    # print("Obstacles list", obstacles_list)
-                    # time.sleep(1)
-                    # obstacles_list = [ob if type(ob)==np.ndarray else np.array(ob) for ob in obstacles_list]
-
                     self.planner.update_obstacles(obstacles_list)
                     # Plan!
                     policy = self.policy_buffer.readFromRT()
