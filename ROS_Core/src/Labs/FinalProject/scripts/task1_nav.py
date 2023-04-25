@@ -2,6 +2,7 @@ import rospy
 from racecar_routing.srv import Plan, PlanResponse, PlanRequest
 from task2_world.util import RefPath, RealtimeBuffer
 from nav_msgs.msg import Odometry
+
 # This is a collection of janky boilerplate. Good luck.
 # see todo.md for more info on what to do here
 class SmartNavigator():
@@ -22,8 +23,8 @@ class SmartNavigator():
         x_start = odom_msg.pose.pose.position.x # x coordinate of the start
         y_start = odom_msg.pose.pose.position.y # y coordinate of the start
 
-        x_goal = # x coordinate of the goal
-        y_goal = # y coordinate of the goal
+        x_goal = 0 # x coordinate of the goal
+        y_goal = 0 # y coordinate of the goal
 
         plan_request = PlanRequest([x_start, y_start], [x_goal, y_goal])
         plan_response = plan_client(plan_request)
@@ -77,6 +78,7 @@ class SmartNavigator():
         return state_global
 
 
+## publish static obstacles?
 # self.static_obs_publisher = rospy.Publisher(self.static_obs_topic, MarkerArray, queue_size=1)
 
 # pose_sub = message_filters.Subscriber(self.odom_topic, Odometry)

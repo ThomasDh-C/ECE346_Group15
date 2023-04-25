@@ -18,7 +18,7 @@ class StaticObstacle():
 
         self.T_rob2cam = np.array([[1.0, 0.0, 0.0, -0.357], # camera center offset
                                     [0.0, 1.0, 0.0, -0.06],
-                                    [0.0, 0.0, 1.0, 0], #wheelbase
+                                    [0.0, 0.0, 1.0, 0], # wheelbase
                                     [0.0, 0.0, 0.0, 1.0]]) # camera to rear axis transform
         self.T_cam2rob = np.linalg.inv(self.T_base2cam)
 
