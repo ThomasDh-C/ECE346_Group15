@@ -23,7 +23,7 @@ plan_response = plan_client(plan_request)
 # The following script will generate a reference path in [RefPath](scripts/task2_world/util.py#L65) class, which has been used in your Lab1's ILQR planner
 x = []
 y = []
-width_L = []
+width_L = [] ## bounds on road
 width_R = []
 speed_limit = []
 
