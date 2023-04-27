@@ -6,6 +6,7 @@ import numpy as np
 import os
 import time
 import queue
+import yaml
 
 from utils import RealtimeBuffer, Policy, GeneratePwm
 # from ILQR import RefPath
@@ -58,22 +59,29 @@ class TrajectoryPlanner():
         self.setup_subscriber()
 
         self.setup_service()
+        
+        # Grab waypoints from yaml file
+        config_file_name = __file__.replace("scripts/traj_planner.py", "task1.yaml")
+        # "../task1.yaml"
+        self.load_config(config_file_name)
 
         rospy.loginfo("About to wait for /obstacles/get_frs service...")
 
-        # client for get_frs service on node 'dyn_obstacle_node'
-        rospy.wait_for_service('/obstacles/get_frs')
-        try:
-            # clients don't have to init node. They just have to extract the function (GetFRS) from the previously created service '/obstacles/get_frs'
-            self.dyn_obstacles_client = rospy.ServiceProxy('/obstacles/get_frs', GetFRS)
-        except rospy.ServiceException as e:
-            print("\t########### Service call failed: %s"%e)
+        # # client for get_frs service on node 'dyn_obstacle_node'
+        # rospy.wait_for_service('/obstacles/get_frs')
+        # try:
+        #     # clients don't have to init node. They just have to extract the function (GetFRS) from the previously created service '/obstacles/get_frs'
+        #     self.dyn_obstacles_client = rospy.ServiceProxy('/obstacles/get_frs', GetFRS)
+        # except rospy.ServiceException as e:
+        #     print("\t########### Service call failed: %s"%e)
 
-        # publisher for frs_pub
-        self.frs_pub = rospy.Publisher('/vis/FRS', MarkerArray, queue_size=10)
-        # rospy.init_node('frs_pub', anonymous=False)
+        # # publisher for frs_pub
+        # self.frs_pub = rospy.Publisher('/vis/FRS', MarkerArray, queue_size=10)
+        # # rospy.init_node('frs_pub', anonymous=False)
 
-        # start planning and control thread
+        # start nav thread, control and planning thread
+        threading.Thread(target=self.nav_thread).start()
+
         threading.Thread(target=self.control_thread).start()
         if not self.receding_horizon:
             threading.Thread(target=self.policy_planning_thread).start()
@@ -81,9 +89,29 @@ class TrajectoryPlanner():
             threading.Thread(
                 target=self.receding_horizon_planning_thread).start()
 
-        threading.Thread(target=self.nav_thread).start()
 
         print("\t All threads started from traj_planner.py...")
+
+
+
+    def load_config(self, config_path):
+        '''
+        This function loads parameters from a yaml file.
+        '''
+        # with open(self.warehouse_yaml, "r") as stream:
+            # warehouse_info = yaml.safe_load(stream)
+        with open(config_path, 'r') as f:
+            config_dict = yaml.load(f, Loader=yaml.FullLoader)
+            
+        for key, val in config_dict.items():
+                setattr(self, key, val)
+        # config_varible = vars(self)
+        # for key in config_varible.keys():
+        #     print('key: ', key)
+        #     if key in config_dict:
+        #         setattr(self, key, config_dict[key])
+
+
 
     def read_parameters(self):
         '''
@@ -138,6 +166,7 @@ class TrajectoryPlanner():
         # create buffers to handle multi-threading
         self.plan_state_buffer = RealtimeBuffer()
         self.control_state_buffer = RealtimeBuffer()
+        self.control_state_buffer2 = RealtimeBuffer()
         self.policy_buffer = RealtimeBuffer()
         self.path_buffer = RealtimeBuffer()
         # Indicate if the planner is ready to generate a new trajectory
@@ -216,6 +245,7 @@ class TrajectoryPlanner():
         # Then it will be processed and add to the planner buffer
         # inside the controller thread
         self.control_state_buffer.writeFromNonRT(odom_msg)
+        self.control_state_buffer2.writeFromNonRT(odom_msg)
 
     def path_callback(self, path_msg):
         x = []
@@ -424,6 +454,7 @@ class TrajectoryPlanner():
             # determine if we need to replan
             if self.path_buffer.new_data_available and self.planner_ready:
                 new_path = self.path_buffer.readFromRT()
+                print('given you a path')
                 self.planner.update_ref_path(new_path)
 
                 # check if there is an existing policy
@@ -435,7 +466,7 @@ class TrajectoryPlanner():
                     time.sleep(2)
                 rospy.loginfo('Planning a new policy...')
                 # Get current state
-                # the last element is the time
+                # The last element is the time
                 state = self.plan_state_buffer.readFromRT()[:-1]
                 prev_progress = -np.inf
                 _, _, progress = new_path.get_closest_pts(state[:2])
@@ -458,6 +489,7 @@ class TrajectoryPlanner():
                     prev_progress = progress
                     _, _, progress = new_path.get_closest_pts(state[:2])
                     progress = progress[0]
+                    # TODO: path 
                     print('Planning progress %.4f' % progress, end='\r')
 
                 nominal_trajectory = np.array(
@@ -489,45 +521,63 @@ class TrajectoryPlanner():
         basically just the code from the readme lol
         '''
 
+        # How close it gets to nav goal before it is good
+        EPS = 0.2
+
         print("Entered nav thread...")
         rospy.wait_for_service('/routing/plan')
         plan_client = rospy.ServiceProxy('/routing/plan', Plan)
 
-        print("Done waiting for service: /routing/plan!")
+        # print("Done waiting for service: /routing/plan!")
+
+        # initialize goals to far, far away
+        x_goal = 5 # x coordinate of the goal ## temp values
+        y_goal = 7 # y coordinate of the goal
+        first_time = True
+        current_waypoint = 0
         
         while not rospy.is_shutdown():
-            if self.control_state_buffer.new_data_available:
-                print("new control state buffer data available")
-                odom_msg = self.control_state_buffer.readFromRT()
+            if self.control_state_buffer2.new_data_available:
+                # print("new control state buffer data available")
+                odom_msg = self.control_state_buffer2.readFromRT()
 
                 x_start = odom_msg.pose.pose.position.x # x coordinate of the start
                 y_start = odom_msg.pose.pose.position.y # y coordinate of the start
 
-                x_goal = 0 # x coordinate of the goal ## temp values
-                y_goal = 0 # y coordinate of the goal
+                # print(f'nav_thread: x_start: {x_start}, y_start: {y_start}')
 
-                plan_request = PlanRequest([x_start, y_start], [x_goal, y_goal])
-                plan_response = plan_client(plan_request)
 
-                # The following script will generate a reference path in [RefPath](scripts/task2_world/util.py#L65) class, which has been used in your Lab1's ILQR planner
-                x = []
-                y = []
-                width_L = [] ## bounds on road
-                width_R = []
-                speed_limit = []
+                if first_time or (abs(x_start-x_goal) < EPS and abs(y_start - y_goal) < EPS):
+                    first_time = False
+                    current_waypoint += 1
+                    # Get new goal locations
+                    # TODO: handle last waypoint!
+                    x_goal = self.goals[self.goal_order[current_waypoint]][0]
+                    y_goal = self.goals[self.goal_order[current_waypoint]][1]
 
-                for waypoint in plan_respond.path.poses:
-                    x.append(waypoint.pose.position.x)
-                    y.append(waypoint.pose.position.y)
-                    width_L.append(waypoint.pose.orientation.x)
-                    width_R.append(waypoint.pose.orientation.y)
-                    speed_limit.append(waypoint.pose.orientation.z)
-                            
-                centerline = np.array([x, y])
+                    plan_request = PlanRequest([x_start, y_start], [x_goal, y_goal])
+                    plan_response = plan_client(plan_request)
 
-                # This is the reference path that we passed to the ILQR planner in Lab1
-                ref_path = RefPath(centerline, width_L, width_R, speed_limit, loop=False)
+                    # The following script will generate a reference path in [RefPath](scripts/task2_world/util.py#L65) class, which has been used in your Lab1's ILQR planner
+                    x = []
+                    y = []
+                    width_L = [] ## bounds on road
+                    width_R = []
+                    speed_limit = []
 
+                    for waypoint in plan_response.path.poses:
+                        x.append(waypoint.pose.position.x)
+                        y.append(waypoint.pose.position.y)
+                        width_L.append(waypoint.pose.orientation.x)
+                        width_R.append(waypoint.pose.orientation.y)
+                        speed_limit.append(waypoint.pose.orientation.z)
+                                
+                    centerline = np.array([x, y])
+
+                    # This is the reference path that we passed to the ILQR planner in Lab1
+                    ref_path = RefPath(centerline, width_L, width_R, speed_limit, loop=False)
+                    self.path_buffer.writeFromNonRT(ref_path)
+                    print('New reference path written')
 
     def receding_horizon_planning_thread(self):
         '''
@@ -564,19 +614,19 @@ class TrajectoryPlanner():
                     for vertices in self.static_obstacle_dict.values():
                         obstacles_list.append(vertices)
                     # update dynamic obstacles
-                    try:
-                        t_list= t_cur + np.arange(self.planner.T)*self.planner.dt
-                        frs_respond = self.get_frs(t_list)
-                        obstacles_list.extend(frs_to_obstacle(frs_respond))
-                        self.frs_pub.publish(frs_to_msg(frs_respond))
-                    except:
-                        rospy.logwarn_once('FRS server not available!')
-                        frs_respond = None
+                    # try:
+                    #     t_list= t_cur + np.arange(self.planner.T)*self.planner.dt
+                    #     frs_respond = self.get_frs(t_list)
+                    #     obstacles_list.extend(frs_to_obstacle(frs_respond))
+                    #     self.frs_pub.publish(frs_to_msg(frs_respond))
+                    # except:
+                    #     rospy.logwarn_once('FRS server not available!')
+                    #     frs_respond = None
                         
                     self.planner.update_obstacles(obstacles_list)
                     
                     # Replan use ilqr
-                    new_plan = self.planner.plan(state_cur[:-1], init_controls, verbose=False)
+                    new_plan = self.planner.plan(state_cur[:-1], init_controls)
                     
                     plan_status = new_plan['status']
                     if plan_status == -1:
