@@ -301,6 +301,7 @@ class ILQR_np():
 		X, U = self.rollout(
 				nominal_states, nominal_controls, K_closed_loop, k_open_loop, alpha
 		)
+		
 		path_refs, obs_refs = self.get_references(X)
 		
 		J = self.cost.get_traj_cost(X, U, path_refs, obs_refs)

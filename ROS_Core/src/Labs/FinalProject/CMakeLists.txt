@@ -119,6 +119,7 @@ catkin_package(
 install(PROGRAMS
   scripts/task2_world_node.py
   scripts/task1_obstacle_detection_node.py
+  scripts/path_planner_node.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

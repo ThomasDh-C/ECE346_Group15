@@ -57,5 +57,12 @@
     
     <node type="rqt_gui" name="rqt_gui" pkg="rqt_gui" 
         args="--perspective-file $(find racecar_interface)/rviz/rqt_sim.perspective"/>
-    
+
+    <node pkg="final_project" type="path_planner_node.py" name="path_planning" output="$(arg output)">
+        <param name="odom_topic"           value="$(arg odom_topic)" />
+    </node>
+
+    <include file="$(find racecar_planner)/launch/ilqr_simulation_final_proj.launch" >
+        <arg name="receding_horizon" value="true"/>
+    </include>
 </launch>

@@ -18,4 +18,15 @@
 - receding horizon thread - runs ilqr
 - waypoint thread - publishes refpath to next waypoint (/Routing/Path)
 
+roslaunch final_project task1_simulation.launch
+
+- clean up launch file so only essential args
+- only add close obstacles (this is inside receding horizon thread)
+- update index correctly for next target
+- add subscriber for obstacles in planner_node and see if it works
+- switch to jax
+- Try to see how to run faster speed of the car (ask zixu)
+
+
+
 ## Task 2

@@ -9,378 +9,407 @@ from .cost import Cost, CollisionChecker, Obstacle
 from .ref_path import RefPath
 from .config import Config
 import time
-from jax.lax import fori_loop
-from functools import partial
-import jax.numpy as jnp
 
-status_lookup = ['Iteration Limit Exceed',
-                 'Converged',
-                 'Failed Line Search']
-
+status_lookup = ["Iteration Limit Exceed",
+                "Converged",
+                "Failed Line Search"]
 
 class ILQR():
-    def __init__(self, config_file=None) -> None:
+	def __init__(self, config_file = None) -> None:
 
-        self.config = Config()  # Load default config.
-        if config_file is not None:
-            self.config.load_config(config_file)  # Load config from file.
+		self.config = Config()  # Load default config.
+		if config_file is not None:
+			self.config.load_config(config_file)  # Load config from file.
+		
+		self.load_parameters()
+		print('ILQR setting:', self.config)
 
-        self.load_parameters()
-        print('ILQR setting:', self.config)
+		# Set up Jax parameters
+		jax.config.update('jax_platform_name', self.config.platform)
+		print('Jax using Platform: ', jax.lib.xla_bridge.get_backend().platform)
 
-        # Set up Jax parameters
-        jax.config.update('jax_platform_name', self.config.platform)
-        print('Jax using Platform: ', jax.lib.xla_bridge.get_backend().platform)
+		# If you want to use GPU, lower the memory fraction from 90% to avoid OOM.
+		os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '20'
 
-        # If you want to use GPU, lower the memory fraction from 90% to avoid OOM.
-        os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '20'
+		self.dyn = Bicycle5D(self.config)
+		self.cost = Cost(self.config)
+		self.ref_path = None
 
-        self.dyn = Bicycle5D(self.config)
-        self.cost = Cost(self.config)
-        self.ref_path = None
+		# collision checker
+		# Note: This will not be used until lab2.
+		self.collision_checker = CollisionChecker(self.config)
+		self.obstacle_list = []
 
-        # collision checker
-        # Note: This will not be used until lab2.
-        self.collision_checker = CollisionChecker(self.config)
-        self.obstacle_list = []
+		self.warm_up()
 
-        # Do a dummy run to warm up the jitted functions.
-        self.warm_up()
+	def load_parameters(self):
+		'''
+		This function defines ILQR parameters from <self.config>.
+		'''
+		# ILQR parameters
+		self.dim_x = self.config.num_dim_x
+		self.dim_u = self.config.num_dim_u
+		self.T = int(self.config.T)
+		self.dt = float(self.config.dt)
+		self.max_iter = int(self.config.max_iter)
+		self.tol = float(self.config.tol)  # ILQR update tolerance.
 
-    def load_parameters(self):
-        '''
-        This function defines ILQR parameters from <self.config>.
-        '''
-        # ILQR parameters
-        self.dim_x = self.config.num_dim_x
-        self.dim_u = self.config.num_dim_u
-        self.T = int(self.config.T)
-        self.dt = float(self.config.dt)
-        self.max_iter = int(self.config.max_iter)
-        self.tol = float(self.config.tol)  # ILQR update tolerance.
+		# line search parameters.
+		self.alphas = self.config.line_search_base**(np.arange(self.config.line_search_a,
+                                                self.config.line_search_b,
+                                                self.config.line_search_c)
+                                            )
 
-        # line search parameters.
-        self.alphas = self.config.line_search_base**(
-            np.arange(self.config.line_search_a,
-                      self.config.line_search_b,
-                      self.config.line_search_c)
-        )
+		print('Line Search Alphas: ', self.alphas)
 
-        print('Line Search Alphas: ', self.alphas)
+		# regularization parameters
+		self.reg_min = float(self.config.reg_min)
+		self.reg_max = float(self.config.reg_max)
+		self.reg_init = float(self.config.reg_init)
+		self.reg_scale_up = float(self.config.reg_scale_up)
+		self.reg_scale_down = float(self.config.reg_scale_down)
+		self.max_attempt = self.config.max_attempt
+		
+	def warm_up(self):
+		'''
+		Warm up the jitted functions.
+		'''
+		# Build a fake path as a 1 meter radius circle.
+		theta = np.linspace(0, 2 * np.pi, 100)
+		centerline = np.zeros([2, 100])
+		centerline[0,:] = 1 * np.cos(theta)
+		centerline[1,:] = 1 * np.sin(theta)
 
-        # regularization parameters
-        self.reg_min = float(self.config.reg_min)
-        self.reg_max = float(self.config.reg_max)
-        self.reg_init = float(self.config.reg_init)
-        self.reg_scale_up = float(self.config.reg_scale_up)
-        self.reg_scale_down = float(self.config.reg_scale_down)
-        self.max_attempt = self.config.max_attempt
+		self.ref_path = RefPath(centerline, 0.5, 0.5, 1, True)
 
-    def warm_up(self):
-        '''
-        Warm up the jitted functions.
-        '''
-        # Build a fake path as a 1 meter radius circle.
-        theta = np.linspace(0, 2 * np.pi, 100)
-        centerline = np.zeros([2, 100])
-        centerline[0, :] = 1 * np.cos(theta)
-        centerline[1, :] = 1 * np.sin(theta)
+		# add obstacle
+		obs = np.array([[0, 0, 0.5, 0.5], [1, 1.5, 1, 1.5]]).T
+		obs_list = [[obs for _ in range(self.T)]]
+		self.update_obstacles(obs_list)
 
-        self.ref_path = RefPath(centerline, 0.5, 0.5, 1, True)
+		x_init = np.array([0.0, -1.0, 1, 0, 0])
+		print('Start warm up ILQR...')
+		# import matplotlib.pyplot as plt
+		self.plan(x_init, verbose=False)
+		print('ILQR warm up finished.')
+		# plt.plot(plan['trajectory'][0,:], plan['trajectory'][1,:])
+		# print(f'Warm up takes {plan['t_process']} seconds.')
+		self.ref_path = None
+		self.obstacle_list = []
 
-        # add obstacle
-        obs = np.array([[0, 0, 0.5, 0.5], [1, 1.5, 1, 1.5]]).T
-        obs_list = [[obs for _ in range(self.T)]]
-        self.update_obstacles(obs_list)
+	def update_ref_path(self, ref_path: RefPath):
+		'''
+		Update the reference path.
+		Args:
+			ref_path: RefPath: reference path.
+		'''
+		self.ref_path = ref_path
 
-        x_init = np.array([0.0, -1.0, 1, 0, 0])
-        print('Start warm up ILQR...')
-        self.plan(x_init)
-        print('ILQR warm up finished.')
+	def update_obstacles(self, vertices_list: list):
+		'''
+		Update the obstacle list for a list of vertices.
+		Args:
+			vertices_list: list of np.ndarray: list of vertices for each obstacle.
+		'''
+		# Note: This will not be used until lab2.
+		self.obstacle_list = []
+		for vertices in vertices_list:
+			self.obstacle_list.append(Obstacle(vertices))
 
-        self.ref_path = None
-        self.obstacle_list = []
+	def get_references(self, trajectory: Union[np.ndarray, DeviceArray]):
+		'''
+		Given the trajectory, get the path reference and obstacle information.
+		Args:
+			trajectory: [num_dim_x, T] trajectory.
+		Returns:
+			path_refs: [num_dim_x, T] np.ndarray: references.
+			obs_refs: [num_dim_x, T] np.ndarray: obstacle references.
+		'''
+		trajectory = np.asarray(trajectory)
+		path_refs = self.ref_path.get_reference(trajectory[:2, :])
+		obs_refs = self.collision_checker.check_collisions(trajectory, self.obstacle_list)
+		return path_refs, obs_refs
 
-    def update_ref_path(self, ref_path: RefPath):
-        '''
-        Update the reference path.
-        Args:
-                ref_path: RefPath: reference path.
-        '''
-        self.ref_path = ref_path
+	def plan(self, init_state: np.ndarray, 
+				controls: Optional[np.ndarray] = None, verbose=False) -> Dict:
+		
+		# We first check if the planner is ready
+		if self.ref_path is None:
+			return dict(status=-1)
+		
+		t_start = time.time()
+		'''
+		Main ILQR loop.
+		Args:
+			init_state: [num_dim_x] np.ndarray: initial state.
+			control: [num_dim_u, N] np.ndarray: initial control.
+		'''
+		# np.set_printoptions(suppress=True, precision=5)
+		if controls is None:
+			print('No initial control is provided. Using zero control.')
+			controls =np.zeros((self.dim_u, self.T))
+		else:
+			assert controls.shape[1] == self.T
+		
+		# Rolls out the nominal trajectory and gets the initial cost.
+		#* This is differnet from the naive ILQR as it relies on the information
+		#* from the pyspline.
+		trajectory, controls = self.dyn.rollout_nominal_np(init_state, controls)
 
-    def update_obstacles(self, vertices_list: list):
-        '''
-        Update the obstacle list for a list of vertices.
-        Args:
-                vertices_list: list of np.ndarray: list of vertices for each obstacle.
-        '''
-        # Note: This will not be used until lab2.
-        self.obstacle_list = []
-        for vertices in vertices_list:
-            self.obstacle_list.append(Obstacle(vertices))
+		path_refs, obs_refs = self.get_references(trajectory)
 
-    def get_references(self, trajectory: Union[np.ndarray, DeviceArray]):
-        '''
-        Given the trajectory, get the path reference and obstacle information.
-        Args:
-                trajectory: [num_dim_x, T] trajectory.
-        Returns:
-                path_refs: [num_dim_x, T] np.ndarray: references.
-                obs_refs: [num_dim_x, T] np.ndarray: obstacle references.
-        '''
-        trajectory = np.asarray(trajectory)
-        path_refs = self.ref_path.get_reference(trajectory[:2, :])
-        obs_refs = self.collision_checker.check_collisions(
-            trajectory, self.obstacle_list)
-        return path_refs, obs_refs
+		J = self.cost.get_traj_cost(trajectory, controls, path_refs, obs_refs)
 
-    def compute_new_cost(self, trajectory, controls):
-        # Get path and obstacle references based on your current nominal trajectory.
-        # Note: you will NEED TO call this function and get new references at each iteration.
-        path_refs, obs_refs = self.get_references(trajectory)
+		converged = False
+		reg = self.reg_init
+		
+		# parameters for tracking the status
+		fail_attempts = 0
 
-        # Get the initial cost of the trajectory.
-        return self.cost.get_traj_cost(trajectory, controls, path_refs, obs_refs)
+		t_setup = time.time() - t_start
+		status = 0
+		num_cost_der = 0
+		num_dyn_der = 0
+		num_back = 0
+		num_forward = 0
+		t_cost_der = 0
+		t_dyn_der = 0
+		t_back = 0
+		t_forward = 0
 
-    def backward_pass(self, x_nom, u_nom, path_refs, obs_refs, lambda_val=1):
-        ''' Run backward LQR pass
-                x_nom: 5xN matrix of trajectory
-                u_nom: 2xN matrix of nominal controls
-                target_state: 5d matrix of target state
+		for i in range(self.max_iter):
+			updated = False
+			# Get the derivatives of the cost 
+			t0 = time.time()
+			q, r, Q, R, H = self.cost.get_derivatives_np(trajectory, controls, path_refs, obs_refs)
+			t_cost_der += (time.time()-t0)
+			num_cost_der += 1
+			
+			# We only need dynamics derivatives (A and B matrics) from 0 to N-2.
+			# But doing slice with Jax will leads to performance issue.
+			# So we calculate the derivatives from 0 to N-1 and Backward pass will ignore the last one.
+			t0 = time.time()
+			A, B = self.dyn.get_jacobian_np(trajectory, controls)
+			t_dyn_der += (time.time()-t0)
+			num_dyn_der += 1
+			
+			if np.any(np.isnan(Q)):
+				print("Detect NAN in Q")
+				print("traj:", trajectory)
+				print("control", controls)
+				print("path", path_refs)
+				print("obs", obs_refs)
+				break
+			#Backward pass with new regularization.
+			t0 = time.time()
+			K_closed_loop, k_open_loop, reg = self.backward_pass(
+				q=q, r=r, Q=Q, R=R, H=H, A=A, B=B, reg = reg
+			)
+			t_back += (time.time()-t0)
+			num_back += 1
+			
+			if np.any(np.isnan(K_closed_loop)):
+				print("Detect NAN in K_closed_loop")
+				break
 
-                Returns:
-                K: State feedback matrices
-                k: feedforward offsets
-                lambda_val: regularisation parameter
-        '''
-        # Note: Largely based on handout and python example code
-        # ported to jax + variables according to handout and slide names
+			if np.any(np.isnan(k_open_loop)):
+				print("Detect NAN in k_open_loop")
+				break
 
-        # Get path and obstacle references based on your current nominal trajectory.
-        q, r, Q, R, H = self.cost.get_derivatives_np(
-            x_nom, u_nom, path_refs, obs_refs)
-        A, B = self.dyn.get_jacobian_np(x_nom, u_nom)
-        k_open_loop = np.zeros((2, self.T))
-        K_closed_loop = np.zeros((2, 5, self.T))
+			# Line search through alphas.
+			for alpha in self.alphas:
+				t0 = time.time()
+				X_new, U_new, J_new, refs_new, obs_refs_new = (
+						self.forward_pass(
+								trajectory, controls, K_closed_loop, k_open_loop, alpha
+						)
+				)
+				t_forward += (time.time()-t0)
+				num_forward += 1
+				
+				# check NAN
+				if np.any(np.isnan(X_new)):
+					print("Detect NAN")
+					continue
 
-        # Derivative of value function at final step
-        end_t_idx = self.T - 1
-        p = q[:, end_t_idx]
-        P = Q[:, :, end_t_idx]
-        t = end_t_idx - 1
-        lambda_a = 5  # Arbitrary - just has to be over 1
-        while t >= 0:
-            A_curr = A[:, :, t]
-            B_curr = B[:, :, t]
-            Q_x = q[:, t] + np.matmul(A_curr.T, p)
-            Q_u = r[:, t] + np.matmul(B_curr.T, p)
-            Q_xx = Q[:, :, t] + \
-                np.matmul(A_curr.T, np.matmul(P, A_curr))
-            Q_uu = R[:, :, t] + \
-                np.matmul(B_curr.T, np.matmul(P, B_curr))
-            Q_ux = H[:, :, t] + \
-                np.matmul(B_curr.T, np.matmul(P, A_curr))
-            # Add regularization
-            reg_matrix = lambda_val * np.eye(5)
-            Q_uu_reg = R[:, :, t] + \
-                np.matmul(B_curr.T, np.matmul(
-                    (P+reg_matrix), B_curr))
-            Q_ux_reg = H[:, :, t] + \
-                np.matmul(B_curr.T, np.matmul(
-                    (P+reg_matrix), A_curr))
-            # Check if Q_uu_reg is positive definite
-            if not np.all(np.linalg.eigvals(Q_uu_reg) > 0) and lambda_val < 1e5:
-                lambda_val *= lambda_a
-                t = end_t_idx - 1  # restart from end of trajectory
-                p = q[:, end_t_idx]
-                P = Q[:, :, end_t_idx]
-                continue
+				if J_new <= J:  # Improved!
+					# Small improvement.
+					# if np.abs(J-J_new)/max(1, np.abs(J)) < self.tol:
+					if np.abs(J-J_new) < (self.tol*min(1,alpha)):
+						converged = True
+					if verbose:
+						print("Update from ", J, " to ", J_new, "reg: ", reg,
+							"alpha: {0:0.3f}".format(alpha), "{0:0.3f}".format(time.time()-t_start))
+					# Updates nominal trajectory and best cost.
+					J = J_new
+					trajectory = X_new
+					controls = U_new
+					path_refs = refs_new
+					obs_refs = obs_refs_new
+					reg = max(self.reg_min, reg/self.reg_scale_down)
+					updated = True
+					fail_attempts = 0
+					break # break the for loop
+				elif np.abs(J-J_new) < 1e-3:
+					converged = True
+					if verbose:
+						print(f"cost increase from {J} to {J_new}, but the difference is {np.abs(J-J_new)} is small.")
+					break
 
-            Q_uu_reg_inv = np.linalg.inv(Q_uu_reg)
+			# Terminates early if the objective improvement is negligible.
+			if converged:
+				status = 1
+				break
 
-            # Calculate policy
+			# if no line search succeeds, terminate.
+			if not updated:
+				fail_attempts += 1
+				reg = reg*self.reg_scale_up
+				if verbose: 
+					print(f"Fail attempts {fail_attempts}, cost increase from {J} to {J_new} new reg {reg}.")
+				if fail_attempts > self.max_attempt or reg > self.reg_max:
+					status = 2
+					break
 
-            k = np.matmul(-Q_uu_reg_inv, Q_u)
-            k_open_loop[:, t] = k
+		t_process = time.time() - t_start
+		analysis_string = f"Exit after {i} iterations with runtime {t_process} with status {status_lookup[status]}. "+ \
+					f"Set uo takes {t_setup} s. " + \
+					f"Total {num_cost_der} cost derivative with average time of {t_cost_der/num_cost_der} s. " + \
+					f"Total {num_dyn_der} dyn derivative with average time of {t_dyn_der/num_dyn_der} s. " + \
+					f"Total {num_forward} forward with average time of {t_forward/num_forward} s. " +\
+					f"Total {num_back} cost derivative with average time of {t_back/num_back} s."
 
-            K = np.matmul(-Q_uu_reg_inv, Q_ux_reg)
-            K_closed_loop[:, :, t] = K
+		if verbose:
+			print(analysis_string)
 
-            # Update value function derivative for the previous time step
-            p = Q_x + np.matmul(K.T, np.matmul(Q_uu, k)) + \
-                np.matmul(K.T, Q_u) + np.matmul(Q_ux.T, k)
-            P = Q_xx + \
-                np.matmul(K.T, np.matmul(Q_uu, K)) + \
-                np.matmul(K.T, Q_ux) + \
-                np.matmul(Q_ux.T, K)
-            t -= 1
+		solver_info = dict(
+				trajectory=np.asarray(trajectory), controls=np.asarray(controls),
+				K_closed_loop=np.asarray(K_closed_loop),
+				k_open_loop=np.asarray(k_open_loop), t_process=t_process,
+				status=status, J=J, q=q, r=r,
+				Q=Q, R=R, H=H,
+				A=A, B=B, T = self.T, dt = self.dt, 
+				analysis = analysis_string
+		)
+		return solver_info
 
-        lambda_val = max(1e-5, lambda_val*0.5)
-        return K_closed_loop, k_open_loop, lambda_val
+	def forward_pass(
+			self, nominal_states: np.ndarray, nominal_controls: np.ndarray,
+			K_closed_loop: np.ndarray, k_open_loop: np.ndarray, alpha: float
+	) -> Tuple[np.ndarray, np.ndarray, float, np.ndarray, np.ndarray,
+			np.ndarray]:
+		X, U = self.rollout(
+				nominal_states, nominal_controls, K_closed_loop, k_open_loop, alpha
+		)
+		path_refs, obs_refs = self.get_references(X)
+		
+		J = self.cost.get_traj_cost(X, U, path_refs, obs_refs)
+		
+		return X, U, J, path_refs, obs_refs
 
-    def line_search(self, x, x_nom, u_nom, controls, alpha_curr, k, K):
+	def backward_pass(
+			self, q: np.ndarray, r: np.ndarray, Q: np.ndarray,
+			R: np.ndarray, H: np.ndarray, A: np.ndarray, B: np.ndarray,
+			reg: float
+	) -> Tuple[np.ndarray, np.ndarray]:
+		"""
+		backward pass looped computation.
 
-        for t in range(self.T - 1):
-            dx = x[:, t] - x_nom[:, t]
-            dx[3] = np.arctan2(np.sin(dx[3]), np.cos(dx[3]))
-            controls_temp = u_nom[:, t] + np.matmul(
-                K[:, :, t], dx) + (alpha_curr * k[:, t])
-            x[:, t+1], u_clip = self.dyn.integrate_forward_np(
-                x[:, t], controls_temp)
+		Args:
+				q (np.ndarray): (dim_x, N)
+				r (np.ndarray): (dim_u, N)
+				Q (np.ndarray): (dim_x, dim_x, N)
+				R (np.ndarray): (dim_u, dim_u, N)
+				H (np.ndarray): (dim_u, dim_x, N)
+				A (np.ndarray): (dim_x, dim_x, N-1)
+				B (np.ndarray): (dim_x, dim_u, N-1)
 
-            # ran controls with clipped controls anyways
-            controls[:, t] = u_clip
-        return np.copy(x), np.copy(controls)
+		Returns:
+				Ks (np.ndarray): gain matrices (dim_u, dim_x, N - 1)
+				ks (np.ndarray): gain vectors (dim_u, N - 1)
+		"""
+		Ks = np.zeros((self.dim_u, self.dim_x, self.T - 1))
+		ks = np.zeros((self.dim_u, self.T - 1))
+		V_x = q[:, -1]
+		V_xx = Q[:, :, -1]
+		t = self.T-2
 
-        # ########## x.at[idx].set(y)
-    @partial(jax.jit, static_argnums=(0,))
-    def line_search_jax(self, x: np.ndarray, x_nom: np.ndarray, u_nom: np.ndarray, controls: np.ndarray, alpha_curr: float, k: np.ndarray, K: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        @jax.jit
-        def body_line_search_jax(t, args):
-            x, x_nom, u_nom, controls, alpha_curr, k, K = args
-            dx = x[:, t] - x_nom[:, t]
-            dx = dx.at[3].set(jnp.arctan2(jnp.sin(dx[3]), jnp.cos(dx[3])))
-            controls_temp = u_nom[:, t] + jnp.matmul(
-                K[:, :, t], dx) + (alpha_curr * k[:, t])
-            x_temp, u_clip = self.dyn.integrate_forward_jax(
-                x[:, t], controls_temp)
-            x = x.at[:, t+1].set(x_temp)
-            controls = controls.at[:, t].set(u_clip)
-            # print('hello from deeeeeeep inside')
-            return x, x_nom, u_nom, controls, alpha_curr, k, K
+		while t>=0:
+			Q_x = q[:, t] + A[:, :, t].T @ V_x
+			Q_u = r[:, t] + B[:, :, t].T @ V_x
+			Q_xx = Q[:, :, t] + A[:, :, t].T @ V_xx @ A[:, :, t]
+			Q_ux = H[:, :, t] + B[:, :, t].T @ V_xx @ A[:, :, t]
+			Q_uu = R[:, :, t] + B[:, :, t].T @ V_xx @ B[:, :, t]
 
-        # x[:, 0] = jnp.at.set(x_nom[:, 0])
-        _, _, _, _, _, _, _ = jax.lax.fori_loop(0, self.T-1, body_line_search_jax,
-                                                (x, x_nom, u_nom, controls, alpha_curr, k, K))
-        # print('in between world')
-        # x = x.set(temp_x)
-        # print('hello from the inside')
-        return x, controls
+			# According to the paper, the regularization is added to Vxx for robustness.
+			# http://roboticexplorationlab.org/papers/iLQR_Tutorial.pdf
+			reg_mat = reg* np.eye(self.dim_x)
+			V_xx_reg = V_xx + reg_mat
+			Q_ux_reg = H[:, :, t] + B[:, :, t].T @ V_xx_reg @ A[:, :, t]
+			Q_uu_reg = R[:, :, t] + B[:, :, t].T @ V_xx_reg @ B[:, :, t]
 
-    def plan(self, init_state: np.ndarray,
-             u_nom: Optional[np.ndarray] = None) -> Dict:
-        '''
-        Main ILQR loop.
-        Args:
-                init_state: [num_dim_x] np.ndarray: initial state.
-                u_nom: [num_dim_u, T] np.ndarray: optional initial control.
-        Returns:
-                A dictionary with the following keys:
-                        status: int: -1 for failure, 0 for success. You can add more status if you want.
-                        t_process: float: time spent on planning.
-                        x_nom: [num_dim_x, T] np.ndarray: ILQR planned x_nom.
-                        controls: [num_dim_u, T] np.ndarray: ILQR planned controls sequence.
-                        K_closed_loop: [num_dim_u, num_dim_x, T] np.ndarray: closed loop gain.
-                        k_closed_loop: [num_dim_u, T] np.ndarray: closed loop bias.
-        '''
+			if (not (np.all(np.linalg.eigvalsh(Q_uu_reg) > 0)) and (reg < self.reg_max)):
+				t = self.T-2
+				V_x = q[:, -1]
+				V_xx = Q[:, :, -1]
+				reg *= self.reg_scale_up
+				continue
 
-        # We first check if the planner is ready
-        if self.ref_path is None:
-            # print('No reference path is provided.')
-            return dict(status=-1)
+			Q_uu_reg_inv = np.linalg.inv(Q_uu_reg)
 
-        # if no initial control sequence is provided, we assume it is all zeros.
-        if u_nom is None:
-            u_nom = np.zeros((self.dim_u, self.T))
-        else:
-            assert u_nom.shape[1] == self.T
+			Ks[:, :, t] = (-Q_uu_reg_inv @ Q_ux_reg)
+			ks[:, t] = (-Q_uu_reg_inv @ Q_u)
 
-        # Start timing
-        t_start = time.time()
+			V_x = Q_x + Ks[:,:,t].T @ Q_u + Q_ux.T @ ks[:, t] + Ks[:,:,t].T @ Q_uu @ ks[:, t] 
+			V_xx = Q_xx +  Ks[:, :, t].T @ Q_ux+ Q_ux.T @ Ks[:, :, t] + Ks[:, :, t].T @ Q_uu @ Ks[:, :, t]
+			t -= 1
 
-        # 1. Rolls out the nominal x_nom (implemented) and gets the initial cost.
-        x_nom, u_nom = self.dyn.rollout_nominal_np(init_state, u_nom)
-        controls = np.copy(u_nom)  # initialize for later :)
-        improved_flag = True  # again init for later
+		return Ks, ks, reg
 
-        # 2. Get the initial cost of the x_nom.
-        path_refs, obs_refs = self.get_references(x_nom)
-        Jorig = self.cost.get_traj_cost(x_nom, u_nom, path_refs, obs_refs)
+	def rollout(
+			self, nominal_states: np.ndarray, nominal_controls: np.ndarray,
+			K_closed_loop: np.ndarray, k_open_loop: np.ndarray, alpha: float
+	) -> Tuple[np.ndarray, np.ndarray]:
+		X = np.zeros((self.dim_x, self.T))
+		U = np.zeros((self.dim_u, self.T))  #  Assumes the last ctrl are zeros.
 
-        ##########################################################################
-        # TODO 1: Implement the ILQR algorithm. Feel free to add any helper functions.
-        # You will find following implemented functions useful:
-        # https://colab.research.google.com/drive/1Svs5mOh-2WPcUbjGc_DEs2tnez3gRwei?usp=sharinghttps%3A%2F%2Fcolab.research.google.com%2Fdrive%2F1Svs5mOh-2WPcUbjGc_DEs2tnez3gRwei%3Fusp%3Dsharing#scrollTo=1JAhQdsMt7gV
-        # from canvas was useful :)
-        # use jax so can use gpu and ta happy
+		X[:,0] = nominal_states[:,0]
 
-        steps = 0
-        converged_flag = False
-        K, k = None, None
-        lambda_val = 1
+		for t in range(self.T - 1):
+			dx = X[:, t] - nominal_states[:, t]
+			# VERY IMPORTANT: THIS IS A HACK TO MAKE THE ANGLE DIFFERENCE BETWEEN -pi and pi
+			dx[3] = np.mod(dx[3] + np.pi, 2 * np.pi) - np.pi
+			u_fb = np.einsum("ik,k->i", K_closed_loop[:, :, t], dx)
+			u = nominal_controls[:, t] + alpha * k_open_loop[:, t] + u_fb
+			x_nxt, u_clip = self.dyn.integrate_forward_np(X[:, t], u)
+			X[:, t+1] = x_nxt
+			U[:, t] =u_clip
 
-        x = np.zeros_like(x_nom)
-        while steps <= self.max_iter:
-            # Backward pass
-            # JAX arrays are immutable. Instead of ``x[idx] = y``, use ``x = x.at[idx].set(y)`` or another .at[] method: https://jax.readthedocs.io/en/latest/_autosummary/jax.numpy.ndarray.at.html
-            # t_backward = time.time()
-            if not improved_flag:
-                lambda_val *= 5
-                if lambda_val > 1000:
-                    break
-            K, k, lambda_val = self.backward_pass(
-                x_nom, u_nom, path_refs, obs_refs, lambda_val)
-            # print(f't_backward pass: {1000*(time.time() - t_backward):.2f}ms')
+		return X, U
 
-            # Forward pass
-            t_forward = time.time()
-            improved_flag = False
-            for alpha_curr in self.alphas:
-                # print('hello')
-                # x, controls = self.line_search(
-                #     x, x_nom, u_nom, controls, alpha_curr, k, K)
-                # # 1. Rolls out the nominal x_nom
-                # # update controls
-                x[:, 0] = x_nom[:, 0]
-                for t in range(self.T - 1):
-                    dx = x[:, t] - x_nom[:, t]
-                    dx[3] = np.arctan2(np.sin(dx[3]), np.cos(dx[3]))
-                    controls_temp = u_nom[:, t] + np.matmul(
-                        K[:, :, t], dx) + (alpha_curr * k[:, t])
-                    x[:, t+1], u_clip = self.dyn.integrate_forward_np(
-                        x[:, t], controls_temp)
+	def warm_up(self):
+		"""Warm up the jitted functions."""
+		
+		# Build a fake path as a 1 meter radius circle.
+		theta = np.linspace(0, 2 * np.pi, 100)
+		centerline = np.zeros([2, 100])
+		centerline[0,:] = 1 * np.cos(theta)
+		centerline[1,:] = 1 * np.sin(theta)
 
-                    # ran controls with clipped controls anyways
-                    controls[:, t] = u_clip
+		self.ref_path = RefPath(centerline, 0.5, 0.5, 1, True)
 
-                # 2. Get the initial cost of the x_nom.
-                # ?? - save references of objects you may hit/ needed for compute for backward pass
-                # @partial(jax.jit, static_argnums=(0,)) --> for things you wanna jit
-                # regular functions that aren't in your class just @jax.jit decorator
-                # make sure your inptus are always same shape
-                # while, for and if are special in jax --> have conditional function
-                # no slicing outside of jitted functions
-                # if line search fail, can try larger lambda value in backward pass (multiply and try again)
-                # check self parameters for backward pass
-                # get speed for plan one step to 0.1s
-                path_refs, obs_refs = self.get_references(x)
-                Jnew = self.cost.get_traj_cost(
-                    x, controls, path_refs, obs_refs)
-                if Jnew < Jorig:
-                    improved_flag = True
-                    if np.abs(Jnew - Jorig) < self.config.tol:
-                        converged_flag = True
-                    x_nom = np.copy(x)
-                    u_nom = np.copy(controls)
-                    Jorig = Jnew
-                    break
+		# add obstacle
+		obs = np.array([[0, 0, 0.5, 0.5], [1, 1.5, 1, 1.5]]).T
+		obs_list = [[obs for _ in range(self.T)]]
+		self.update_obstacles(obs_list)
 
-            steps += 1
-            if converged_flag:
-                break
-            # break if feedforward terms are sufficiently small
-            # print(f't_forward pass: {1000*(time.time() - t_forward):.2f}ms')
-            # print(f'Converged in {steps} iterations')
-        ########################### #END of TODO 1 #####################################
-        t_process = time.time() - t_start
-        # print(f't_process: {t_process*1000:.2f}ms')
-        solver_info = dict(
-            t_process=t_process,  # Time spent on planning
-            trajectory=x_nom,
-            controls=controls,
-            status=(-1, 0)[converged_flag],
-            K_closed_loop=K,
-            k_open_loop=k
-        )
-        return solver_info
+		x_init = np.array([0.0, -1.0, 1, 0, 0])
+		print("Start warm up ILQR...")
+		# import matplotlib.pyplot as plt
+		plan = self.plan(x_init, verbose=False)
+		print("ILQR warm up finished.")
+		# plt.plot(plan['trajectory'][0,:], plan['trajectory'][1,:])
+		# print(f"Warm up takes {plan['t_process']} seconds.")
+		self.ref_path = None
+		self.obstacle_list = []
+	
