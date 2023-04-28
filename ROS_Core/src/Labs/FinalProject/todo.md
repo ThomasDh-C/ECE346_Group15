@@ -21,6 +21,7 @@
 roslaunch final_project task1_simulation.launch
 
 - switch to jax - DONE
+- make better ref-path - DONE
 - update index correctly for next target
 - clean up launch file so only essential args
 - only add close obstacles (this is inside receding horizon thread)

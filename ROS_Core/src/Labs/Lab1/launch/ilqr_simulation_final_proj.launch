@@ -12,7 +12,7 @@
     <arg name="init_yaw"            default="0"                     doc="initial z position"/>
     <arg name="lane_change_cost"    default="2"                     doc="cost of lane change"/>
     <arg name="replan_dt"           default="0.1"                   doc="time step for replanning"/>
-    <arg name="ilqr_config"         default="configs/lab2_task1.yaml"     doc="path to ilqr config file"/>
+    <arg name="ilqr_config"         default="configs/final_proj_task1.yaml"     doc="path to ilqr config file"/>
     <!-- Obstacles Paramerets  -->
     <arg name="num_dyn_obs"         default="0"                     doc="number of dynamic obsects"/>
     <arg name="num_static_obs"      default="1"                     doc="number of static obsects"/>

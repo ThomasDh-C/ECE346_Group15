@@ -99,7 +99,7 @@ if __name__ == '__main__':
         rospy.sleep(0.1)
     # make a kd tree for x, y coordinates of obstacles
     obstacles_kd_tree = KDTree(np.array(obstacles_list)[:,:2], leaf_size=2) 
-
+    
     while not rospy.is_shutdown():
         if control_state_buffer.new_data_available:
             odom_msg = control_state_buffer.readFromRT()
@@ -139,7 +139,7 @@ if __name__ == '__main__':
                     for dist_to_obs, obs in zip(np.array(dist_to_obs).reshape(-1), np.array(obstacles_list)[closest_obs_idxs,:]):
                         x_obs, y_obs, r_obs = obs
                         # switch sides if inside object or close
-                        if dist_to_obs < r_obs + 0.07:
+                        if dist_to_obs < r_obs + 0.3:
                             # print('---')
                             # print(f'Current position is x: {x:.2f}, y: {y:.2f}')
                             # print(f'Avoiding obstacle id {closest_obs_idxs[0]} with x: {x_obs:.2f}, y: {y_obs:.2f}, r: {r_obs:.2f} at a distance of {dist_to_obs:.2f}')
@@ -148,7 +148,6 @@ if __name__ == '__main__':
                             tang_gradient = tang_gradient[0][0] + np.pi/2
                             deg_tang_gradient = tang_gradient * 180 / np.pi
                             # print(f'Angle in degrees of path (-180 to 180 with x=1 = 0o): {deg_tang_gradient:.2f}')
-                            tang_length = (width_L + width_R)/2
                             new_x = x + (width_L - width_R) * np.cos(tang_gradient)
                             new_y = y + (width_L - width_R) * np.sin(tang_gradient)
                             path_msg.poses[point_idx].pose.position.x = new_x
