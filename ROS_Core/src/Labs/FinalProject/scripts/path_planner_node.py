@@ -78,7 +78,6 @@ if __name__ == '__main__':
 
     rospy.wait_for_service('/routing/plan')
     plan_client = rospy.ServiceProxy('/routing/plan', Plan)
-    # print("Done waiting for service: /routing/plan!")
 
     # initialize goals to far, far away
     x_goal = 5 # x coordinate of the goal ## temp values
@@ -103,15 +102,13 @@ if __name__ == '__main__':
 
     while not rospy.is_shutdown():
         if control_state_buffer.new_data_available:
-            # print("new control state buffer data available")
             odom_msg = control_state_buffer.readFromRT()
 
             x_start = odom_msg.pose.pose.position.x # x coordinate of the start
             y_start = odom_msg.pose.pose.position.y # y coordinate of the start
-            # print(f'nav_thread: x_start: {x_start}, y_start: {y_start}')
             if first_time or \
                 (abs(x_start-x_goal) < EPS and abs(y_start - y_goal) < EPS) or \
-                (rospy.Time.now() - t_last_pub).to_sec()> 3.0:
+                (rospy.Time.now() - t_last_pub).to_sec()> 6.0:
                 first_time = False
                 # current_waypoint += 1
                 print(f'Getting the {current_waypoint}th waypoint: {goals[goal_order[current_waypoint]-1]}')
@@ -142,24 +139,32 @@ if __name__ == '__main__':
                     for dist_to_obs, obs in zip(np.array(dist_to_obs).reshape(-1), np.array(obstacles_list)[closest_obs_idxs,:]):
                         x_obs, y_obs, r_obs = obs
                         # switch sides if inside object or close
-                        if dist_to_obs < r_obs + 0.1:
+                        if dist_to_obs < r_obs + 0.07:
+                            # print('---')
+                            # print(f'Current position is x: {x:.2f}, y: {y:.2f}')
+                            # print(f'Avoiding obstacle id {closest_obs_idxs[0]} with x: {x_obs:.2f}, y: {y_obs:.2f}, r: {r_obs:.2f} at a distance of {dist_to_obs:.2f}')
+                            # -- calculate new x and y --
+                            _, tang_gradient, _  = path_ref_for_tangs.get_closest_pts(np.array([x_obs, y_obs]))
+                            tang_gradient = tang_gradient[0][0] + np.pi/2
+                            deg_tang_gradient = tang_gradient * 180 / np.pi
+                            # print(f'Angle in degrees of path (-180 to 180 with x=1 = 0o): {deg_tang_gradient:.2f}')
+                            tang_length = (width_L + width_R)/2
+                            new_x = x + (width_L - width_R) * np.cos(tang_gradient)
+                            new_y = y + (width_L - width_R) * np.sin(tang_gradient)
+                            path_msg.poses[point_idx].pose.position.x = new_x
+                            path_msg.poses[point_idx].pose.position.y = new_y
+                            # print(f'New position is x: {new_x:.2f}, y: {new_y:.2f}')
+
                             # -- flip width l and r --
+                            # print(f'Width l ({width_L:.2f}) and r pre-flip ({width_R:.2f})')
                             path_msg.poses[point_idx].pose.orientation.x = width_R
                             path_msg.poses[point_idx].pose.orientation.y = width_L
+                            # print(f'Width l ({path_msg.poses[point_idx].pose.orientation.x:.2f}) and r post-flip ({path_msg.poses[point_idx].pose.orientation.y:.2f})')
 
-                            # -- calculate new x and y --
-                            print('x_obs and y_obs', x_obs, y_obs)
-                            _, tang_gradient, _  = path_ref_for_tangs.get_closest_pts(np.array([[x_obs, y_obs]]).T)
-                            tang_gradient = tang_gradient[0][0]
-                            print(tang_gradient)
-                            tang_length = (width_L + width_R)/2
-                            path_msg.poses[point_idx].position.x = x + (width_L - width_R) * np.cos(tang_gradient)
-                            path_msg.poses[point_idx].position.y = y + (width_L - width_R) * np.sin(tang_gradient)
                 path_msg.header = odom_msg.header
                 path_pub.publish(path_msg)
                 t_last_pub = rospy.Time.now()
                 
                 print(f'New reference path written from ({x_start}, {y_start}) to ({x_goal}, {y_goal})')
-                # time.sleep(10)
             
         rospy.sleep(0.1)

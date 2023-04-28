@@ -319,6 +319,7 @@ class RefPath:
             # s = s_local*local_center_line.getLength()/self.length + s0
             s, _ = self.center_line.projectPoint(points.T, eps=eps)
             
+        
         closest_pt, slope = self._interp_s(s)
         slope = slope[np.newaxis, :]
 
