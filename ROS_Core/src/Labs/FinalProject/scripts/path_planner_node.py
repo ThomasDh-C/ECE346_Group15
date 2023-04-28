@@ -11,6 +11,7 @@ from nav_msgs.msg import Path as PathMsg
 import time
 import numpy as np
 from sklearn.neighbors import KDTree
+from copy import deepcopy
 
 control_state_buffer = RealtimeBuffer()
 
@@ -128,7 +129,10 @@ if __name__ == '__main__':
                 speed_limit = []
 
                 path_msg = plan_response.path
+                final_path_msg = deepcopy(path_msg)
+                start_pose, end_pose = path_msg.poses[0], path_msg.poses[-1]    
                 path_ref_for_tangs = msg_to_ref_path(path_msg.poses)
+                switched_point_idxs = set()
                 for point_idx, point in enumerate(path_msg.poses):
                     x = point.pose.position.x # centerline x component
                     y = point.pose.position.y # centerline y component
@@ -141,7 +145,8 @@ if __name__ == '__main__':
                     for dist_to_obs, obs in zip(np.array(dist_to_obs).reshape(-1), np.array(obstacles_list)[closest_obs_idxs,:]):
                         x_obs, y_obs, r_obs = obs
                         # switch sides if inside object or close
-                        if dist_to_obs < r_obs + 0.3:
+                        if dist_to_obs < r_obs + 0.04:
+                            switched_point_idxs.add(point_idx)
                             # print('---')
                             # print(f'Current position is x: {x:.2f}, y: {y:.2f}')
                             # print(f'Avoiding obstacle id {closest_obs_idxs[0]} with x: {x_obs:.2f}, y: {y_obs:.2f}, r: {r_obs:.2f} at a distance of {dist_to_obs:.2f}')
@@ -161,9 +166,22 @@ if __name__ == '__main__':
                             path_msg.poses[point_idx].pose.orientation.x = width_R
                             path_msg.poses[point_idx].pose.orientation.y = width_L
                             # print(f'Width l ({path_msg.poses[point_idx].pose.orientation.x:.2f}) and r post-flip ({path_msg.poses[point_idx].pose.orientation.y:.2f})')
+                
+                final_path_msg.poses = [start_pose] # keep first index
+                for point_idx in range(1, len(path_msg.poses)):
+                    number_points_back = 3
+                    nearby_set = set(range(point_idx-number_points_back, point_idx+number_points_back+1)) - {0}
+                    overlap = nearby_set.intersection(switched_point_idxs)
+                    # print('overlap length',len(overlap))
+                    if point_idx not in switched_point_idxs and len(overlap) > 0:
+                        # print('heeyyyyy - overlap')
+                        continue
+                    final_path_msg.poses.append(path_msg.poses[point_idx])
+                final_path_msg.poses[-1] = end_pose # keep last index
+                # print('msg length ',len(final_path_msg.poses))
 
-                path_msg.header = odom_msg.header
-                path_pub.publish(path_msg)
+                final_path_msg.header = odom_msg.header
+                path_pub.publish(final_path_msg)
                 t_last_pub = rospy.Time.now()
                 
                 print(f'New reference path written from ({x_start}, {y_start}) to ({x_goal}, {y_goal})')
