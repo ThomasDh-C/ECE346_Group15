@@ -169,13 +169,18 @@ if __name__ == '__main__':
                 
                 final_path_msg.poses = [start_pose] # keep first index
                 for point_idx in range(1, len(path_msg.poses)):
-                    number_points_back = 3
+                    number_points_back = 6
                     nearby_set = set(range(point_idx-number_points_back, point_idx+number_points_back+1)) - {0}
                     overlap = nearby_set.intersection(switched_point_idxs)
-                    # print('overlap length',len(overlap))
                     if point_idx not in switched_point_idxs and len(overlap) > 0:
-                        # print('heeyyyyy - overlap')
                         continue
+                    # for the points just before or after a switch, set speed limit
+                    near_change = 3
+                    near_change_set = set(range(point_idx-number_points_back-near_change, point_idx+number_points_back+near_change+1)) - {0} - nearby_set
+                    near_change_overlap = near_change_set.intersection(switched_point_idxs)
+                    if point_idx in switched_point_idxs or len(near_change_overlap) > 0:
+                        speed_limit = 1.2
+                        path_msg.poses[point_idx].pose.orientation.z = speed_limit
                     final_path_msg.poses.append(path_msg.poses[point_idx])
                 final_path_msg.poses[-1] = end_pose # keep last index
                 # print('msg length ',len(final_path_msg.poses))
