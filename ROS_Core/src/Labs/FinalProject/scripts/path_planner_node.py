@@ -75,7 +75,7 @@ if __name__ == '__main__':
         goals = config_dict['goals']
         goal_order = config_dict['goal_order']
 
-    eps = 1.5
+    eps = 0.7
     total_num_waypoints = len(goal_order)
 
     rospy.wait_for_service('/routing/plan')
@@ -102,25 +102,29 @@ if __name__ == '__main__':
     # make a kd tree for x, y coordinates of obstacles
     obstacles_kd_tree = KDTree(np.array(obstacles_list)[:,:2], leaf_size=2) 
     
+    status = 1
     while not rospy.is_shutdown():
         if control_state_buffer.new_data_available:
             odom_msg = control_state_buffer.readFromRT()
 
             x_start = odom_msg.pose.pose.position.x # x coordinate of the start
             y_start = odom_msg.pose.pose.position.y # y coordinate of the start
-            if first_time or (rospy.Time.now() - t_last_pub).to_sec()> 6.0:
+            if first_time or \
+                (abs(x_start-x_goal) < eps and abs(y_start - y_goal) < eps) or \
+                (rospy.Time.now() - t_last_pub).to_sec() > 6.0:
                 first_time = False
                 
                 if (abs(x_start-x_goal) < eps and abs(y_start - y_goal) < eps):
                     current_waypoint += 1
-                    if current_waypoint >= total_num_waypoints: break
+                    if current_waypoint >= total_num_waypoints: 
+                        status = 0
+                        break
 
                 print(f'Getting the {current_waypoint}th waypoint: {goals[goal_order[current_waypoint]-1]}')
                 # Get new goal locations
                 x_goal = goals[goal_order[current_waypoint]-1][0]
                 y_goal = goals[goal_order[current_waypoint]-1][1]
 
-                plan_request = PlanRequest([x_start, y_start], [x_goal, y_goal])
                 plan_response = plan_client(plan_request)
                 x = []
                 y = []
@@ -193,4 +197,7 @@ if __name__ == '__main__':
             
         rospy.sleep(0.1)
 
-    print("Obstacle course complete!")
+    if status == 0:
+        print("Obstacle course complete!")
+    else:
+        print("Obstacle course failed! :(")
