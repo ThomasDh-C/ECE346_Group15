@@ -124,7 +124,7 @@ if __name__ == '__main__':
                 # Get new goal locations
                 x_goal = goals[goal_order[current_waypoint]-1][0]
                 y_goal = goals[goal_order[current_waypoint]-1][1]
-
+                plan_request = PlanRequest([x_start, y_start], [x_goal, y_goal])
                 plan_response = plan_client(plan_request)
                 x = []
                 y = []
