@@ -96,18 +96,21 @@ if __name__ == '__main__':
 
     def update_obs_tree():
         '''create updated KD tree of obstacles'''
+        global obstacles_list
+        obstacles_list = [] # reset every time we call
         static_obstacle_dict_copy = deepcopy(static_obstacle_dict)
-        while len(obstacles_list) == 0:
-            for vertices in static_obstacle_dict_copy.values():
-                x_mean = np.mean(vertices[:, 0])
-                y_mean = np.mean(vertices[:, 1])
-                r = np.sqrt((vertices[0, 0] - x_mean)**2 + (vertices[0, 1] - y_mean)**2)
-                obstacles_list.append([x_mean, y_mean, r])
-            # rospy.sleep(0.1)
+        for vertices in static_obstacle_dict_copy.values():
+            x_mean = np.mean(vertices[:, 0])
+            y_mean = np.mean(vertices[:, 1])
+            r = np.sqrt((vertices[0, 0] - x_mean)**2 + (vertices[0, 1] - y_mean)**2)
+            obstacles_list.append([x_mean, y_mean, r])
         return KDTree(np.array(obstacles_list)[:,:2], leaf_size=2)
     
     # make a kd tree for x, y coordinates of obstacles
     obstacles_kd_tree = update_obs_tree()
+    while len(obstacles_kd_tree.data) == 0:
+        obstacles_kd_tree = update_obs_tree()
+        time.sleep(0.1)
 
     status = 1
     while not rospy.is_shutdown():
