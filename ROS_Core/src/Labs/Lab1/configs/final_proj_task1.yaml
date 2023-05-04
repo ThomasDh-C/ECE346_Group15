@@ -65,30 +65,30 @@ v_ref: 1 # reference velocity
 ########        State Cost          ############
 
 # Path Offset Cost
-path_weight: 20.0 # weight for the path deviation cost
+path_weight: 4.0 # weight for the path deviation cost
 
 # Velocity Cost
 vel_weight: 5.0 # weight for the velocity cost
 
 # Speed Limit Cost
 vel_limit_a: 10.0 # parameter for speed limit cost
-vel_limit_b: 1.0 # parameter for ExpLinear Cost
+vel_limit_b: 0.0 # parameter for ExpLinear Cost
 
 # Heading Cost
-heading_weight: 2  # weight for the heading cost
+heading_weight: 4  # weight for the heading cost
 
 # Lateral Acceleration Cost
 # We use ExpLinearCost for lateral acceleration cost
 lat_accel_thres: 6.0 # threshold for lateral acceleration cost
 lat_accel_a: 7.0 # parameter for lateral acceleration cost
-lat_accel_b: 2.50 # parameter for ExpLinear Cost
+lat_accel_b: 0 #2.50 # parameter for ExpLinear Cost
 
 # Progress Cost
 progress_weight: 0  # weight for the progress cost
 
 # Lane Boundary Cost
 lane_boundary_a: 100.0 # parameter for lane boundary cost
-lane_boundary_b: 0.80 # parameter for ExpLinear Cost
+lane_boundary_b: 0 # parameter for ExpLinear Cost
 
 ########        Control Cost          ############
 # those value should not be too small
@@ -97,4 +97,4 @@ ctrl_cost_steer_weight: 0.5
 
 ########        Obstacle Cost          ############
 obs_a: 25.0 # parameter for obstacle cost
-obs_b: 2.0 # parameter for ExpLinear Cost
+obs_b: 0.0 # parameter for ExpLinear Cost
