@@ -104,12 +104,17 @@ if __name__ == '__main__':
             y_mean = np.mean(vertices[:, 1])
             r = np.sqrt((vertices[0, 0] - x_mean)**2 + (vertices[0, 1] - y_mean)**2)
             obstacles_list.append([x_mean, y_mean, r])
+        if len(obstacles_list) == 0:
+            obstacles_list = [[1000000, 1000000, 0.1]]
+            return KDTree(np.array([[1000000, 1000000]]), leaf_size=2)
         return KDTree(np.array(obstacles_list)[:,:2], leaf_size=2)
     
     # make a kd tree for x, y coordinates of obstacles
     obstacles_kd_tree = update_obs_tree()
-    while len(obstacles_kd_tree.data) == 0:
+    waiting_iters = 0
+    while np.asarray(obstacles_kd_tree.data)[0][0] == 1000000.0 and waiting_iters < 20:
         obstacles_kd_tree = update_obs_tree()
+        waiting_iters += 1
         time.sleep(0.1)
 
     status = 1
