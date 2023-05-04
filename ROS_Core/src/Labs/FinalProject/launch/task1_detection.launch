@@ -5,6 +5,12 @@
     <arg name="odom_topic"          default="/SLAM/Pose"      doc="ROS topic for the pose"/>
     <arg name="control_topic"       default="/Control"              doc="ROS topic for control input"/>
     <arg name="lane_change_cost"    default="1"                     doc="cost of lane change"/>
+    <arg name="pub_rate"            default="30"                    doc="rate at which to publish the pose"/>
+    <arg name="init_x"              default="3"                     doc="initial x position"/>
+    <arg name="init_y"              default="0.15"                     doc="initial y position"/>
+    <arg name="init_yaw"            default="0"                     doc="initial z position"/>
+    <arg name="num_dyn_obs"         default="0"                     doc="number of dynamic obsects"/>
+    <arg name="num_static_obs"      default="20"                     doc="number of static obsects"/>
     <arg name="static_obs_size"     default="0.2"                   doc="type of static obsects"/>
     <arg name="static_obs_topic"    default="/Obstacles/Static"     doc="ROS topic for static obstacles"/>
     <arg name="dyn_obs_topic"       default="/Obstacles/Dynamic"    doc="ROS topic for dynamic obstacles"/>
@@ -32,11 +38,6 @@
         <param name="pub_rate"             value="$(arg pub_rate)" />
     </node>
 
-    <include file="$(find racecar_routing)/launch/routing.launch">
-        <arg name="output"              value="$(arg output)"/>
-        <arg name="odom_topic"          value="$(arg odom_topic)"/>
-        <arg name="lane_change_cost"    value="$(arg lane_change_cost)"/>
-    </include>
 
     <node pkg="racecar_interface" type="visualization_node.py" name="visualization_node" output="$(arg output)">
         <param name="odom_topic"           value="$(arg odom_topic)" />
@@ -60,4 +61,11 @@
     <node type="rqt_gui" name="rqt_gui" pkg="rqt_gui" 
         args="--perspective-file $(find racecar_interface)/rviz/rqt_sim.perspective"/>
     
+    <node pkg="final_project" type="path_planner_node.py" name="path_planning" output="$(arg output)">
+        <param name="odom_topic"           value="$(arg odom_topic)" />
+    </node>
+
+    <include file="$(find racecar_planner)/launch/ilqr_truck_final_proj.launch" >
+        <arg name="receding_horizon" value="true"/>
+    </include>
 </launch>
