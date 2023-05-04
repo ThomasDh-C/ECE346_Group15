@@ -45,6 +45,7 @@ def msg_to_ref_path(poses):
     centerline = np.array([x, y])
     return RefPath(centerline, width_L, width_R, speed_limit, loop=False)
 
+
 if __name__ == '__main__':
     rospy.init_node('path_planning_node')
     rospy.loginfo("Start path planning node")
@@ -92,16 +93,21 @@ if __name__ == '__main__':
 
     # Update the static obstacles
     obstacles_list = []
-    while len(obstacles_list) == 0:
-        for vertices in static_obstacle_dict.values():
-            x_mean = np.mean(vertices[:, 0])
-            y_mean = np.mean(vertices[:, 1])
-            r = np.sqrt((vertices[0, 0] - x_mean)**2 + (vertices[0, 1] - y_mean)**2)
-            obstacles_list.append([x_mean, y_mean, r])
-        rospy.sleep(0.1)
-    # make a kd tree for x, y coordinates of obstacles
-    obstacles_kd_tree = KDTree(np.array(obstacles_list)[:,:2], leaf_size=2) 
+
+    def update_obs_tree():
+        '''create updated KD tree of obstacles'''
+        while len(obstacles_list) == 0:
+            for vertices in static_obstacle_dict.values():
+                x_mean = np.mean(vertices[:, 0])
+                y_mean = np.mean(vertices[:, 1])
+                r = np.sqrt((vertices[0, 0] - x_mean)**2 + (vertices[0, 1] - y_mean)**2)
+                obstacles_list.append([x_mean, y_mean, r])
+            # rospy.sleep(0.1)
+        return KDTree(np.array(obstacles_list)[:,:2], leaf_size=2)
     
+    # make a kd tree for x, y coordinates of obstacles
+    obstacles_kd_tree = update_obs_tree()
+
     status = 1
     while not rospy.is_shutdown():
         if control_state_buffer.new_data_available:
@@ -113,6 +119,8 @@ if __name__ == '__main__':
                 (abs(x_start-x_goal) < eps and abs(y_start - y_goal) < eps) or \
                 (rospy.Time.now() - t_last_pub).to_sec() > 6.0:
                 first_time = False
+
+                obstacles_kd_tree = update_obs_tree()
                 
                 if (abs(x_start-x_goal) < eps and abs(y_start - y_goal) < eps):
                     current_waypoint += 1
