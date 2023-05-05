@@ -396,7 +396,12 @@ class TrajectoryPlanner():
                     # Update the static obstacles
                     obstacles_list = []
                     for vertices in self.static_obstacle_dict.values():
-                        obstacles_list.append(vertices)
+                        x_mean = np.mean(vertices[:, 0])
+                        y_mean = np.mean(vertices[:, 1])
+                        curr_x, curr_y = state_cur[0], state_cur[1]
+                        dist = np.sqrt((curr_x - x_mean)**2 + (curr_y - y_mean)**2)
+                        if dist < 1:
+                            obstacles_list.append(vertices)
                     # update dynamic obstacles
                     try:
                         t_list= t_cur + np.arange(self.planner.T)*self.planner.dt
