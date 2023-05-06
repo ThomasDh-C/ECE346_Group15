@@ -57,7 +57,7 @@ a_max: 5.0 # maximum acceleration
 a_min: -5.0 # minimum acceleration
 
 # reference velocity
-v_ref: .5 # reference velocity
+v_ref: 2 # reference velocity
 ####################################################
 ########## Parameters for ILQR COST ################
 ####################################################

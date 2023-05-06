@@ -14,7 +14,7 @@ from sklearn.neighbors import KDTree
 from copy import deepcopy
 
 from tf.transformations import euler_from_quaternion
-from final_project.srv import Task, TaskRequest, TaskResponse, Reward, RewardRequest, RewardResponse
+from final_project.srv import Task, TaskRequest, TaskResponse, Reward, RewardRequest, RewardResponse, Schedule, ScheduleRequest, ScheduleResponse
 from std_srvs.srv import Empty, EmptyRequest, EmptyResponse
 
 
@@ -123,8 +123,10 @@ if __name__ == '__main__':
             return KDTree(np.array([[1000000, 1000000]]), leaf_size=2)
         return KDTree(np.array(obstacles_list)[:,:2], leaf_size=2)
     
-    def create_boss_obstacle(x,y,z, yaw):
+
+    def create_boss_obstacle(x,y,z, yaw, point_idx):
         marker = Marker()
+        marker.id = point_idx
         marker.header = boss_msg.header
         marker.ns = 'static_obs'
         marker.type = 1 # CUBE
@@ -170,7 +172,24 @@ if __name__ == '__main__':
     time.sleep(10)
     swift_haul_client = rospy.ServiceProxy('/SwiftHaul/Start', Empty)
     swift_haul_client(EmptyRequest())
+    start_time = rospy.get_time()
+    boss_schedule_client = rospy.ServiceProxy('/SwiftHaul/BossSchedule', Schedule)
+    boss_schedule = boss_schedule_client(ScheduleRequest()) # start_warehouse (list of start indexes)
+    print(boss_schedule)
 
+    def response_idx_curr_boss_warehouse():
+        """Get idx in response object of next boss warehouse based on current time"""
+        global start_time, boss_schedule, warehouse_positions
+        curr_time = rospy.get_time() - start_time
+
+        # iterate through boss schedule to find current interval of time
+        response_idx = -1
+        for t_leave in boss_schedule.schedule:
+            if t_leave > curr_time:
+                break
+            response_idx+=1
+        return response_idx
+    curr_response_idx, boss_ref_path_positions, curr_boss_ref_path_kdtree = -1, None, None
     while not rospy.is_shutdown():
         if control_state_buffer.new_data_available:
             odom_msg = control_state_buffer.readFromRT()
@@ -183,27 +202,64 @@ if __name__ == '__main__':
                 first_time = False
 
                 if boss_state_buffer.new_data_available:
-                    boss_msg = boss_state_buffer.readFromRT()
-                    boss_obs_msg = MarkerArray()
-                    next_points = []
+                    # update boss ref path if out of date
+                    response_idx = response_idx_curr_boss_warehouse()
+                    if response_idx != curr_response_idx:
+                        curr_response_idx = response_idx
+                        start_warehouse_idx = boss_schedule.start_warehouse_index[response_idx]
+                        end_warehouse_idx = boss_schedule.goal_warehouse_index[response_idx]
+                        print(f'updating boss start ({start_warehouse_idx}) and end warehouse {end_warehouse_idx}')
+                        boss_x_start, boss_y_start = warehouse_positions[start_warehouse_idx]
+                        boss_x_goal, boss_y_goal = warehouse_positions[end_warehouse_idx]
+                        boss_plan_request = PlanRequest([boss_x_start, boss_y_start], [boss_x_goal, boss_y_goal])
+                        curr_boss_ref_path = plan_client(boss_plan_request).path
+                        boss_ref_path_positions = []
+                        for point in curr_boss_ref_path.poses:
+                            x = point.pose.position.x # centerline x component
+                            y = point.pose.position.y
+                            boss_ref_path_positions.append([x,y])
+                        curr_boss_ref_path_kdtree = KDTree(np.array(boss_ref_path_positions), leaf_size=2)
                     
-                    for p in next_points:
-                        x,y,z,yaw = p
-                        marker = create_boss_obstacle(x,y,z,yaw)
-                        boss_obs_msg.markers.append(marker)
-                    #TODO: if nothing works, grab more code from task1_obstacle_deteciton_node.py
+                    boss_msg = boss_state_buffer.readFromRT()
+                    boss_position = boss_msg.pose.pose.position
+                    boss_x, boss_y = boss_position.x, boss_position.y
+                    _, closest_ref_path_idx = curr_boss_ref_path_kdtree.query([[boss_x, boss_y]], k=1)
+                    closest_ref_path_idx = closest_ref_path_idx[0][0] # weird bodgery
+                    
+                    # had a problem with obstacles not disappearing
+                    boss_obs_msg = MarkerArray()
+                    # marker = create_boss_obstacle(0,0,0,0, 0)
+                    # # marker.id = 3 # deletes all objects
+                    # boss_obs_msg.markers = [marker]
                     boss_obstacle_publisher.publish(boss_obs_msg)
-                    time.sleep(0.05)
 
+                    # actually add in obstacles
+                    boss_obs_msg = MarkerArray()
+                    obstacles_list = []
+                    # obstacle only every other point
+                    for point_idx in range(closest_ref_path_idx,closest_ref_path_idx+7):
+                        point_idx = point_idx if point_idx < len(boss_ref_path_positions) else -1 
+                        x, y  = boss_ref_path_positions[point_idx]
+                        z, yaw = 0, 0
+                        marker = create_boss_obstacle(x,y,z,yaw, point_idx - closest_ref_path_idx)
+                        boss_obs_msg.markers.append(marker)
+                        obstacles_list.append([x, y, .1])
+                    marker = create_boss_obstacle(boss_x,boss_y,0,0, len(boss_obs_msg.markers))
+                    boss_obs_msg.markers.append(marker)
+                    obstacles_list.append([boss_x,boss_y, .1])
 
-                obstacles_kd_tree = update_obs_tree()
+                    boss_obstacle_publisher.publish(boss_obs_msg)
+                    obstacles_kd_tree = KDTree(np.array(obstacles_list)[:,:2], leaf_size=2)
+
+                # obstacles_kd_tree = update_obs_tree()
                 
                 if (abs(x_start-x_goal) < eps and abs(y_start - y_goal) < eps): ## truck at the warehouse
                     time.sleep(2)
                     reward_request = RewardRequest()
                     reward_request.task = target_warehouse
                     reward_response = reward_client(reward_request)
-                    # the log prints out if this ^^ was a success                    
+                    # the log prints out if this ^^ was a success    
+                                    
                     # wait for a task to be available
                     curr_task = -1
                     curr_task_timeout = 0

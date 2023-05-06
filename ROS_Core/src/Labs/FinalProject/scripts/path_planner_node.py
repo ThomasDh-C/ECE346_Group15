@@ -52,7 +52,6 @@ if __name__ == '__main__':
     
     odom_msg_buffer = RealtimeBuffer()
     
-
     # odom_sub is for pose
     odom_topic = get_ros_param('~odom_topic', '/slam_pose')
     odom_sub = rospy.Subscriber(odom_topic, Odometry, odometry_callback, queue_size=10)
