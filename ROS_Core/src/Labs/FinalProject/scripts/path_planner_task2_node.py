@@ -15,6 +15,7 @@ from copy import deepcopy
 
 from tf.transformations import euler_from_quaternion
 from final_project.srv import Task, TaskRequest, TaskResponse, Reward, RewardRequest, RewardResponse
+from std_srvs.srv import Empty, EmptyRequest, EmptyResponse
 
 
 control_state_buffer = RealtimeBuffer()
@@ -63,7 +64,6 @@ if __name__ == '__main__':
     odom_sub = rospy.Subscriber(odom_topic, Odometry, odometry_callback, queue_size=10)
     path_pub = rospy.Publisher('/Routing/Path', PathMsg, queue_size=1)
 
-
     # get boss pose
     boss_odom_topic = get_ros_param('~boss_odom_topic', '/Boss/Pose')
     boss_odom_subscriber = rospy.Subscriber(boss_odom_topic, Odometry, boss_odometry_callback, queue_size=10)
@@ -84,7 +84,7 @@ if __name__ == '__main__':
     static_obs_sub = rospy.Subscriber(static_obs_topic, MarkerArray, static_obs_callback, queue_size=10)
 
     # get warehouse positions from yaml file
-    config_path = __file__.replace("scripts/path_planner_node.py", "task2.yaml")
+    config_path = __file__.replace("scripts/path_planner_task2_node.py", "task2.yaml")
     warehouse_positions = []
     with open(config_path, 'r') as f:
         config_dict = yaml.load(f, Loader=yaml.FullLoader)
@@ -165,6 +165,12 @@ if __name__ == '__main__':
 
     # start by assuming we want warehouse A
     target_warehouse = 0 
+
+    # wait for ILQR to warm up before starting SwiftHaul
+    time.sleep(10)
+    swift_haul_client = rospy.ServiceProxy('/SwiftHaul/Start', Empty)
+    swift_haul_client(EmptyRequest())
+
     while not rospy.is_shutdown():
         if control_state_buffer.new_data_available:
             odom_msg = control_state_buffer.readFromRT()
@@ -188,25 +194,24 @@ if __name__ == '__main__':
                     #TODO: if nothing works, grab more code from task1_obstacle_deteciton_node.py
                     boss_obstacle_publisher.publish(boss_obs_msg)
                     time.sleep(0.05)
-                    
-                
+
 
                 obstacles_kd_tree = update_obs_tree()
                 
                 if (abs(x_start-x_goal) < eps and abs(y_start - y_goal) < eps): ## truck at the warehouse
-                    reward_response = reward_client(RewardRequest())
-                    print(f'Completed last task? {reward_response.done}')
-                    print(f'Current reward: {reward_response.total_reward}')
-                    
+                    time.sleep(2)
+                    reward_request = RewardRequest()
+                    reward_request.task = target_warehouse
+                    reward_response = reward_client(reward_request)
+                    # the log prints out if this ^^ was a success                    
                     # wait for a task to be available
                     curr_task = -1
                     curr_task_timeout = 0
                     while curr_task == -1:
-                        # 
-                        curr_task_timeout += 1
-                        if curr_task_timeout > 20: 
-                            print("Took too long getting next task!!!!!")
-                            break
+                        # curr_task_timeout += 1
+                        # if curr_task_timeout > 20: 
+                        #     print("Took too long getting next task!!!!!")
+                        #     break
 
                         # hopefully finished the old task, time for new task
                         task_response = side_task_client(TaskRequest())

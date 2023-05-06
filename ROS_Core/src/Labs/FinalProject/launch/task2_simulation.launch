@@ -29,6 +29,7 @@
         <arg name="init_y"                  value="$(arg init_y)" />
         <arg name="init_yaw"                value="$(arg init_yaw)" />
         <arg name="lane_change_cost"        value="$(arg lane_change_cost)"/>
+        <arg name="enable_routing"          value="true"/>
     </include>
 
     <!-- This section launch the simulation of the boss truck -->

@@ -38,3 +38,6 @@ roslaunch final_project task1_simulation.launch
 Greedy strategy
 - Treat boss as "dynamic" obstacle
 - Wait in front of first warehouse, grab first task, always accept and drive fast
+
+- TODO: call swifthaul/start in software, currently need to call from RQT
+  - Wait until ILQR done warming up to call it
