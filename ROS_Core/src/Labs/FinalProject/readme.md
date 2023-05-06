@@ -1,5 +1,16 @@
 # Final Project Hints
 
+# To run:
+## Task 1:
+On car run only receding horizon ilqr with closest obstacles:
+1. Run roslaunch racecar_planner ilqr_truck_final_proj.launch
+
+In theory these can be combined (see task1_detection) ... but unsure about computation power slowdowns (think this has been fixed with runnin ilqr on the car, only using closest obstacles for ilqr and using lab2_task1.launch)
+1. computer 1: roslaunch final_project task1_detection_computer.launch
+2. computer 2: roslaunch racecar_interface visualization.launch
+
+## Task 2
+
 # Plan a reference path from a point to another point
 The easiest way to plan a reference path is call the ROS service "/routing/plan" provided in racecar_routing package. For example
 
