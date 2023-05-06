@@ -14,6 +14,7 @@ from sklearn.neighbors import KDTree
 from copy import deepcopy
 
 from tf.transformations import euler_from_quaternion
+from final_project.srv import Task, TaskRequest, TaskResponse, Reward, RewardRequest, RewardResponse
 
 
 control_state_buffer = RealtimeBuffer()
@@ -69,6 +70,9 @@ if __name__ == '__main__':
     static_obs_topic = get_ros_param('~static_obs_topic', '/Obstacles/Static')
     boss_obstacle_publisher = rospy.Publisher(static_obs_topic, MarkerArray, queue_size=1)
 
+    # side tasks
+    side_task_client = rospy.ServiceProxy('/SwiftHaul/SideTask', Task)
+    reward_client = rospy.ServiceProxy('/SwiftHaul/GetReward', Reward)
 
     static_obstacle_dict = {}
     def static_obs_callback(markers_msg):
@@ -88,7 +92,7 @@ if __name__ == '__main__':
             curr_warehouse = config_dict[f'warehouse_{warehouse_letter}']
             warehouse_positions.append(curr_warehouse['location'])
             
-    eps = 0.7
+    eps = 0.25
 
     rospy.wait_for_service('/routing/plan')
     plan_client = rospy.ServiceProxy('/routing/plan', Plan)
@@ -97,7 +101,6 @@ if __name__ == '__main__':
     x_goal = 5 # x coordinate of the goal ## temp values
     y_goal = 7 # y coordinate of the goal
     first_time = True
-    current_waypoint = 1
 
     path_msg = None
     t_last_pub = None
@@ -160,7 +163,8 @@ if __name__ == '__main__':
         waiting_iters += 1
         time.sleep(0.1)
 
-    status = 1
+    # start by assuming we want warehouse A
+    target_warehouse = 0 
     while not rospy.is_shutdown():
         if control_state_buffer.new_data_available:
             odom_msg = control_state_buffer.readFromRT()
@@ -189,16 +193,33 @@ if __name__ == '__main__':
 
                 obstacles_kd_tree = update_obs_tree()
                 
-                if (abs(x_start-x_goal) < eps and abs(y_start - y_goal) < eps):
-                    current_waypoint += 1
-                    if current_waypoint >= total_num_waypoints: 
-                        status = 0
-                        break
+                if (abs(x_start-x_goal) < eps and abs(y_start - y_goal) < eps): ## truck at the warehouse
+                    reward_response = reward_client(RewardRequest())
+                    print(f'Completed last task? {reward_response.done}')
+                    print(f'Current reward: {reward_response.total_reward}')
+                    
+                    # wait for a task to be available
+                    curr_task = -1
+                    curr_task_timeout = 0
+                    while curr_task == -1:
+                        # 
+                        curr_task_timeout += 1
+                        if curr_task_timeout > 20: 
+                            print("Took too long getting next task!!!!!")
+                            break
 
-                print(f'Getting the {current_waypoint}th waypoint: {goals[goal_order[current_waypoint]-1]}')
+                        # hopefully finished the old task, time for new task
+                        task_response = side_task_client(TaskRequest())
+                        curr_task = task_response.task
+                        print(f'Got task {curr_task}')
+                        print(f'Predicted reward: {task_response.reward}')
+                        if curr_task == -1: time.sleep(1) # have to wait 5 seconds
+                    target_warehouse = curr_task
+
                 # Get new goal locations
-                x_goal = goals[goal_order[current_waypoint]-1][0]
-                y_goal = goals[goal_order[current_waypoint]-1][1]
+                print(f'Getting warehouse id {target_warehouse}: {warehouse_positions[target_warehouse]}')
+                x_goal = warehouse_positions[target_warehouse][0]
+                y_goal = warehouse_positions[target_warehouse][1]
                 plan_request = PlanRequest([x_start, y_start], [x_goal, y_goal])
                 plan_response = plan_client(plan_request)
                 x = []
@@ -263,8 +284,3 @@ if __name__ == '__main__':
                 print(f'New reference path written from ({x_start}, {y_start}) to ({x_goal}, {y_goal})')
             
         rospy.sleep(0.1)
-
-    if status == 0:
-        print("Obstacle course complete!")
-    else:
-        print("Obstacle course failed! :(")

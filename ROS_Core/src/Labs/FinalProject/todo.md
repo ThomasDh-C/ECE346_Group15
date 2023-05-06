@@ -35,3 +35,6 @@ roslaunch final_project task1_simulation.launch
 
 
 ## Task 2
+Greedy strategy
+- Treat boss as "dynamic" obstacle
+- Wait in front of first warehouse, grab first task, always accept and drive fast

@@ -10,6 +10,16 @@
     <arg name="lane_change_cost"    default="2"                     doc="cost of lane change"/>
 
     <!-- TODO: add your decision making and trajectory planning nodes here -->
+    <rosparam file="$(find final_project)/task2.yaml" command="load" />
+
+    <include file="$(find racecar_planner)/launch/ilqr_simulation_final_proj.launch" >
+        <arg name="receding_horizon" value="true"/>
+    </include>
+
+    <node pkg="final_project" type="path_planner_task2_node.py" name="path_planning" output="$(arg output)">
+        <param name="odom_topic"           value="$(arg odom_topic)" />
+    </node>
+
     <!-- This section launch the simulation of the student truck -->
     <include file="$(find racecar_interface)/launch/simulation.launch" >
         <arg name="odom_topic"              value="$(arg odom_topic)" />
