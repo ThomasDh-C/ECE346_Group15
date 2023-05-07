@@ -38,7 +38,6 @@
         <param name="pub_rate"             value="$(arg pub_rate)" />
     </node>
 
-
     <node pkg="racecar_interface" type="visualization_node.py" name="visualization_node" output="$(arg output)">
         <param name="odom_topic"           value="$(arg odom_topic)" />
         <param name="control_topic"        value="$(arg control_topic)"/>

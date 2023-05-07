@@ -1,8 +1,7 @@
 <launch>
     <arg name="output"              default="screen"                doc="display output to screen or log file"/>
-    <arg name="odom_topic"          default="/Simulation/Pose"      doc="ROS topic for the pose"/>
+    <arg name="odom_topic"          default="/SLAM/Pose"      doc="ROS topic for the pose"/>
     <arg name="control_topic"       default="/Control"              doc="ROS topic for control input"/>
-    <arg name="obstacle_topic"      default="/Prediction/Obstacles" doc="ROS topic for obstacles"/>
     <arg name="pub_rate"            default="20"                    doc="rate at which to publish the pose"/>
     <arg name="init_x"              default="2.5"                     doc="initial x position"/>
     <arg name="init_y"              default="0.15"                  doc="initial y position"/>
@@ -12,16 +11,12 @@
     <!-- TODO: add your decision making and trajectory planning nodes here -->
     <rosparam file="$(find final_project)/task2.yaml" command="load" />
 
-    <include file="$(find racecar_planner)/launch/ilqr_simulation_final_proj.launch" >
-        <arg name="receding_horizon" value="true"/>
-    </include>
-
     <node pkg="final_project" type="path_planner_task2_node.py" name="path_planning" output="$(arg output)">
         <param name="odom_topic"           value="$(arg odom_topic)" />
     </node>
 
     <!-- This section launch the simulation of the student truck -->
-    <include file="$(find racecar_interface)/launch/simulation.launch" >
+    <!-- <include file="$(find racecar_interface)/launch/simulation.launch" >
         <arg name="odom_topic"              value="$(arg odom_topic)" />
         <arg name="control_topic"           value="$(arg control_topic)" />
         <arg name="pub_rate"                value="$(arg pub_rate)" />
@@ -30,11 +25,29 @@
         <arg name="init_yaw"                value="$(arg init_yaw)" />
         <arg name="lane_change_cost"        value="$(arg lane_change_cost)"/>
         <arg name="enable_routing"          value="true"/>
+    </include> -->
+
+    <include file="$(find racecar_routing)/launch/visualize_map.launch">
+        <arg name="output"              value="$(arg output)"/>
     </include>
 
+    <include file="$(find racecar_routing)/launch/routing.launch">
+            <arg name="output"              value="$(arg output)"/>
+            <arg name="odom_topic"          value="$(arg odom_topic)"/>
+            <arg name="lane_change_cost"    value="$(arg lane_change_cost)"/>
+            <arg name="click_goal"          value="false"/>
+    </include>
+
+    <node type="rviz" name="rviz" pkg="rviz" 
+        args="-d $(find racecar_interface)/rviz/simulation.rviz" />
+    
+    <node type="rqt_gui" name="rqt_gui" pkg="rqt_gui" 
+        args="--perspective-file $(find racecar_interface)/rviz/rqt_sim.perspective"/>
+    
+    
     <!-- This section launch the simulation of the boss truck -->
     <!-- You DO NOT need to modify this section -->
-    <node pkg="racecar_interface" type="simulation_node.py" name="boss_simulation_node" output="$(arg output)">
+    <!-- <node pkg="racecar_interface" type="simulation_node.py" name="boss_simulation_node" output="$(arg output)">
         <param name="odom_topic"           value="/Boss/Pose" />
         <param name="control_topic"        value="/Boss/servo_control" />
         <param name="pub_rate"             value="$(arg pub_rate)" />
@@ -42,11 +55,11 @@
         <param name="init_y"               value="0.15" />
         <param name="init_yaw"             value="0" />
         <param name="serice_name"          value="Boss/reset" />
-    </node>
+    </node> -->
 
     <!-- This section launch the world model -->
     <!-- You DO NOT need to modify this section -->
-    <node pkg="final_project" type="task2_world_node.py" name="task2_world_node" output="$(arg output)">
+    <!-- <node pkg="final_project" type="task2_world_node.py" name="task2_world_node" output="$(arg output)">
         <param name="time_limit"                value="300" />
         <param name="dt_refresh"                value="5" />
         <param name="warehouse_yaml"            value="$(find final_project)/task2.yaml" />
@@ -55,5 +68,6 @@
         <param name="boss_odom_topic"           value="/Boss/Pose" />
         <param name="boss_control_topic"        value="/Boss/servo_control" />
         <param name="simulation"                value="True" />
-    </node>
+    </node> -->
+
 </launch>
