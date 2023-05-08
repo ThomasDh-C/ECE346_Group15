@@ -47,7 +47,7 @@
     
     <!-- This section launch the simulation of the boss truck -->
     <!-- You DO NOT need to modify this section -->
-    <!-- <node pkg="racecar_interface" type="simulation_node.py" name="boss_simulation_node" output="$(arg output)">
+    <node pkg="racecar_interface" type="simulation_node.py" name="boss_simulation_node" output="$(arg output)">
         <param name="odom_topic"           value="/Boss/Pose" />
         <param name="control_topic"        value="/Boss/servo_control" />
         <param name="pub_rate"             value="$(arg pub_rate)" />
@@ -55,11 +55,11 @@
         <param name="init_y"               value="0.15" />
         <param name="init_yaw"             value="0" />
         <param name="serice_name"          value="Boss/reset" />
-    </node> -->
+    </node>
 
     <!-- This section launch the world model -->
     <!-- You DO NOT need to modify this section -->
-    <!-- <node pkg="final_project" type="task2_world_node.py" name="task2_world_node" output="$(arg output)">
+    <node pkg="final_project" type="task2_world_node.py" name="task2_world_node" output="$(arg output)">
         <param name="time_limit"                value="300" />
         <param name="dt_refresh"                value="5" />
         <param name="warehouse_yaml"            value="$(find final_project)/task2.yaml" />
@@ -68,6 +68,6 @@
         <param name="boss_odom_topic"           value="/Boss/Pose" />
         <param name="boss_control_topic"        value="/Boss/servo_control" />
         <param name="simulation"                value="True" />
-    </node> -->
+    </node>
 
 </launch>
