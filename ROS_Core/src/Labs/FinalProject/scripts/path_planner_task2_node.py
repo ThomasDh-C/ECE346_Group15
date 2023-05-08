@@ -148,14 +148,13 @@ def boss_obstacle_target():
             
             # had a problem with obstacles not disappearing
             boss_obs_msg = MarkerArray()
-            # marker = create_boss_obstacle(0,0,0,0, 0)
-            # # marker.id = 3 # deletes all objects
-            # boss_obs_msg.markers = [marker]
+            marker = create_boss_obstacle(0,0,0,0, 0)
+            marker.action = 3 # deletes all objects
+            boss_obs_msg.markers = [marker]
             boss_obstacle_publisher.publish(boss_obs_msg)
-
+            # rospy.sleep(0.1)
             # actually add in obstacles
             boss_obs_msg = MarkerArray()
-            obstacles_list = []
             # obstacle only every other point
             for point_idx in range(closest_ref_path_idx,closest_ref_path_idx+7):
                 point_idx = point_idx if point_idx < len(boss_ref_path_positions) else -1 
@@ -163,12 +162,11 @@ def boss_obstacle_target():
                 z, yaw = 0, 0
                 marker = create_boss_obstacle(x,y,z,yaw, point_idx - closest_ref_path_idx)
                 boss_obs_msg.markers.append(marker)
-                obstacles_list.append([x, y, .1])
             marker = create_boss_obstacle(boss_x,boss_y,0,0, len(boss_obs_msg.markers))
             boss_obs_msg.markers.append(marker)
-            obstacles_list.append([boss_x,boss_y, .1])
 
             boss_obstacle_publisher.publish(boss_obs_msg)
+            rospy.sleep(0.1)
             # obstacles_kd_tree = KDTree(np.array(obstacles_list)[:,:2], leaf_size=2)
         else:
             rospy.sleep(0.1)
@@ -190,9 +188,14 @@ if __name__ == '__main__':
     reward_client = rospy.ServiceProxy('/SwiftHaul/GetReward', Reward)
 
     static_obstacle_dict = {}
+    t_last_obs_refresh = rospy.get_time()
     def static_obs_callback(markers_msg):
         '''callback function for static obstacle topic'''
-        # reset dict every call
+        # reset dict every 10 seconds
+        global static_obstacle_dict, t_last_obs_refresh
+        if rospy.get_time() - t_last_obs_refresh > 10:
+            static_obstacle_dict = {}
+            t_last_obs_refresh = rospy.get_time()
         for marker in markers_msg.markers:
             idx, verts = get_obstacle_vertices(marker)
             static_obstacle_dict[idx] = verts
@@ -281,10 +284,11 @@ if __name__ == '__main__':
                     curr_task = -1
                     curr_task_timeout = 0
                     while curr_task == -1:
-                        # curr_task_timeout += 1
-                        # if curr_task_timeout > 20: 
-                        #     print("Took too long getting next task!!!!!")
-                        #     break
+                        curr_task_timeout += 1
+                        if curr_task_timeout > 20: 
+                            print("Took too long getting next task!!!!!")
+                            curr_task = 0
+                            break
 
                         # hopefully finished the old task, time for new task
                         task_response = side_task_client(TaskRequest())
